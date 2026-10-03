@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import lockfile from "proper-lockfile";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import {
-  AccountStore, StoreValidationError, AccountNotFoundError,
+  AccountStore, StoreValidationError, AccountNotFoundError, StoreLockCompromisedError,
   DuplicateAccountError, addAccount, removeAccount, setPreferred,
   setCooldown, clearCooldown, setNeedsAttention, setIdentity,
   normalizeConfigDir, type StateFile,
@@ -18,6 +19,36 @@ async function fixture() {
 }
 
 describe("account store", () => {
+  it("records timer lock compromise without throwing and rejects mutation with a typed error", async () => {
+    const { path, store } = await fixture();
+    await store.load();
+    const before = await readFile(path, "utf8");
+    let compromise!: (error: Error) => void;
+    const release = vi.fn(async () => { throw Object.assign(new Error("already released"), { code: "ERELEASED" }); });
+    const spy = vi.spyOn(lockfile, "lock").mockImplementationOnce(async (_path, options) => {
+      compromise = options!.onCompromised!;
+      return release;
+    });
+    let timerError: unknown;
+    const cause = Object.assign(new Error("lock changed"), { code: "ECOMPROMISED" });
+    try {
+      await expect(store.mutate(async current => {
+        await new Promise<void>(resolve => setTimeout(() => {
+          try { compromise(cause); } catch (error) { timerError = error; }
+          resolve();
+        }, 0));
+        return addAccount(current, "main", null);
+      })).rejects.toBeInstanceOf(StoreLockCompromisedError);
+      expect(timerError).toBeUndefined();
+      expect(release).toHaveBeenCalledOnce();
+      expect(await readFile(path, "utf8")).toBe(before);
+    } finally {
+      spy.mockRestore();
+    }
+    await store.mutate(current => addAccount(current, "work", "/work"));
+    expect((await store.load()).accounts[0].name).toBe("work");
+  });
+
   it("loads a missing file as an empty default", async () => {
     const { store } = await fixture();
     expect(await store.load()).toEqual(empty());

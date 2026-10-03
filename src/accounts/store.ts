@@ -55,6 +55,15 @@ export class DuplicateAccountError extends StoreValidationError {
   }
 }
 
+/** The shared lock was lost; reload before retrying the operation. */
+export class StoreLockCompromisedError extends Error {
+  readonly code = "STORE_LOCK_COMPROMISED";
+  constructor(cause: Error) {
+    super("Account store lock was compromised; reload before retrying", { cause });
+    this.name = "StoreLockCompromisedError";
+  }
+}
+
 /** A rename succeeded but a durability step failed. Reload before retrying. */
 export class StoreCommitUncertainError extends Error {
   readonly code = "STORE_COMMIT_UNCERTAIN";
@@ -200,9 +209,10 @@ export class AccountStore {
 
   /** Callbacks run under the shared lock: keep them pure, short, and local. */
   async mutate(mutation: StoreMutation): Promise<StateFile> {
-    const operation = this.localMutation.then(() => this.withLock(async () => {
+    const operation = this.localMutation.then(() => this.withLock(async assertLock => {
       const current = await this.readOrInitialize();
       const next = normalizeStore(await mutation(current));
+      assertLock();
       await this.writeAtomically(next);
       return next;
     }));
@@ -262,10 +272,12 @@ export class AccountStore {
     }
   }
 
-  private async withLock<T>(operation: () => Promise<T>): Promise<T> {
+  private async withLock<T>(operation: (assertLock: () => void) => Promise<T>): Promise<T> {
     await mkdirAsync(dirname(this.path), { recursive: true, mode: 0o700 });
     await chmod(dirname(this.path), 0o700);
     // A sibling lock with realpath:false also works before state.json exists.
+    let compromised: StoreLockCompromisedError | undefined;
+    const assertLock = () => { if (compromised) throw compromised; };
     const release = await lockfile.lock(this.path, {
       lockfilePath: `${this.path}.lock`,
       realpath: false,
@@ -273,12 +285,23 @@ export class AccountStore {
       stale: LOCK_STALE_MS,
       update: LOCK_UPDATE_MS,
       retries: LOCK_RETRIES,
-      onCompromised: error => { throw error; },
+      // proper-lockfile calls this from a timer: never throw outside the operation.
+      onCompromised: error => { compromised ??= new StoreLockCompromisedError(error); },
     });
     try {
-      return await operation();
+      assertLock();
+      const result = await operation(assertLock);
+      assertLock();
+      return result;
     } finally {
-      await release();
+      try {
+        await release();
+      } catch (error) {
+        // A compromised lock is already released by proper-lockfile. Preserve
+        // the typed compromise error rather than masking it with ERELEASED.
+        if (!compromised) throw error;
+      }
+      assertLock();
     }
   }
 }

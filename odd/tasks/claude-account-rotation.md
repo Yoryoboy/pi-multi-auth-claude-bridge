@@ -54,7 +54,7 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - [x] **ODD-4 — Error classifier and reset parser**
   - Classes above; locale time parsing; +24h self-correction; 1h fallback.
   - Acceptance: fixture-driven tests for each class and locale formats (`18:30:00`, `6:30:00 PM`).
-- [ ] **ODD-5 — Extension wiring**
+- [x] **ODD-5 — Extension wiring**
   - Turn-start recompute and capture; `message_end` classify -> cooldown/switch; all-exhausted non-retryable rewrite; status bar and notifications.
   - Acceptance: tests with a fake Pi API; verify replacement is applied before Pi's retry classification.
 - [ ] **ODD-6 — `/claude-account` command and startup validation**
@@ -65,11 +65,13 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
   - Acceptance: checklist executed and results recorded here.
 
 ## Follow-ups
-- R3-001: `onCompromised` throws from a proper-lockfile timer callback, which may surface as an uncaught exception inside the Pi process. Revisit before ODD-5 wiring (log + degrade instead of throw).
+- R3-001: fixed in ODD-5 — `onCompromised` no longer throws; in-flight `mutate` rejects with a typed error.
 - R3-002: store test coverage advisory; revisit with R3-001.
+- R3-cooldown-regression (`reset.ts:40`): the +24h self-correction is applied to every source (epoch, wall time, fallback) whenever `until <= previousUntil`; review whether it should only apply to wall-time probes, and whether one +24h step is enough when `previousUntil` is further ahead.
 
 ## Evidence
 - ODD-1: `npm install` ok (3 audit warnings, untouched); `npm run typecheck` pass; `npm test` 1/1 pass; `pi -e ./src/index.ts --list-models` exit 0 with no extension errors. No meaningful RED for a no-op scaffold; entry test asserts no registration and no env mutation. Commit: `5650a3c` (`chore: scaffold claude account rotation extension`).
 - ODD-2: delegated to `gentle-ai-worker` (store + tests, two non-trivial files). RED: module missing; GREEN: `tests/store.test.ts` 21/21, full suite 22/22; `npm run typecheck` pass. Store at `~/.pi/agent/pi-multi-auth-claude-bridge/state.json`, metadata only. Commit: `afe8457` (`feat(accounts): add shared account state store`). Native review `review-2903551fb2b9c104` (medium, reliability lens): approved and acknowledged; advisory findings R3-001 (`store.ts:265-282`, lock handling) and R3-002 (`store.test.ts:20-100`) recorded as follow-ups.
 - ODD-3: delegated to `gentle-ai-worker` (selector, env helper, two test files). RED: modules missing; GREEN: focused 13/13, full suite 35/35; `npm run typecheck` pass. Commit: `b865371` (`feat(accounts): select active account and apply CLAUDE_CONFIG_DIR`). Native review `review-df1da7276ca30e95`: approved, no findings, acknowledged.
-- ODD-4: delegated to `gentle-ai-worker` (classifier, reset parser, two test files). RED: modules missing; GREEN: focused 67/67, full suite 102/102; `npm run typecheck` pass. Commit: recorded in the next task entry.
+- ODD-4: delegated to `gentle-ai-worker` (classifier, reset parser, two test files). RED: modules missing; GREEN: focused 67/67, full suite 102/102; `npm run typecheck` pass. Commit: `a1ff8c0` (`feat(failover): classify Bridge errors and compute cooldowns`). Native review `review-33174fceaf01cfcf`: approved and acknowledged; advisory R3-cooldown-regression (`reset.ts:40`) recorded as follow-up.
+- ODD-5: delegated to `gentle-ai-worker`. Verified in installed Pi: per-request event is `context` (`dist/core/sdk.js:266-270`, awaited before provider streaming in `pi-agent-core/dist/agent-loop.js:263-275`, also on retry continuation `agent-session.js:1356-1359`) — so attribution is captured per request, not per turn; `message_end` returning `{ message }` replaces in place (`agent-session.js:907-918`) and the replaced `errorMessage` is what the retry classifier sees (`:1390`); Bridge messages carry `provider === "claude-bridge"`. RED: missing runtime module, wiring failures, missing typed compromise error; extra RED on stale attribution after failover + reload failure. GREEN: focused 43/43, full 123/123; typecheck pass. Commit: recorded in the next task entry.
