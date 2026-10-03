@@ -1,11 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createAccountStore } from "./accounts/store.js";
+import { checkAccount, type AuthStatus } from "./auth-status.js";
+import { createAccountCommand } from "./command.js";
+import { createAccountStore, type AccountEntry } from "./accounts/store.js";
 import { createRotationRuntime, type RotationStore } from "./runtime.js";
 
 export interface ExtensionDependencies {
   createStore?: () => RotationStore;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
 }
 
 /**
@@ -17,8 +20,10 @@ export interface ExtensionDependencies {
  */
 export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies = {}): void {
   let context: ExtensionContext | undefined;
+  const store = (deps.createStore ?? createAccountStore)();
   const runtime = createRotationRuntime({
-    store: (deps.createStore ?? createAccountStore)(),
+    store,
+    checkAccount: deps.checkAccount ?? ((account, signal) => checkAccount(account, { env: deps.env, signal })),
     now: deps.now ?? Date.now,
     env: deps.env,
     notify: (message, level) => {
@@ -42,5 +47,16 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     if (event.message.role !== "assistant") return;
     const message = await runtime.onAssistantMessageEnd(event.message);
     if (message) return { message };
+  });
+  pi.on("session_shutdown", () => {
+    runtime.onSessionShutdown();
+  });
+  const command = createAccountCommand({ store, runtime, now: deps.now ?? Date.now, checkAccount: runtime.checkAccount });
+  pi.registerCommand("claude-account", {
+    ...command,
+    handler: async (args, ctx) => {
+      context = ctx;
+      await command.handler(args, ctx);
+    },
   });
 }

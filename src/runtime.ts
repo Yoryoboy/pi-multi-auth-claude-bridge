@@ -1,9 +1,10 @@
 import {
-  setCooldown, setNeedsAttention,
+  setCooldown, setNeedsAttention, setIdentity,
   type AccountEntry, type StateFile, type StoreMutation,
 } from "./accounts/store.js";
 import { nextAfter, selectActive, type Selection } from "./accounts/selector.js";
 import { accountForEnv, applyAccountEnv } from "./env.js";
+import type { AuthStatus } from "./auth-status.js";
 import { classifyError } from "./failover/classify.js";
 import { computeCooldownUntil } from "./failover/reset.js";
 
@@ -17,6 +18,7 @@ export interface RotationDependencies {
   now: () => number;
   notify(message: string, level: "info" | "warning" | "error"): void;
   setStatus(text: string | undefined): void;
+  checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
 }
 export interface RotationMessage {
   role: string;
@@ -38,6 +40,14 @@ export function createRotationRuntime(deps: RotationDependencies) {
   let warnedStore = false;
   let captured: { account: AccountEntry; probe: boolean; previousUntil: number | null } | undefined;
   let lastApplied: typeof captured;
+  let generation = 0;
+  let warnedAuth = false;
+  const pending = new Set<AbortController>();
+  const stopChecks = () => {
+    generation++;
+    for (const controller of pending) controller.abort();
+    pending.clear();
+  };
 
   const warnStore = () => {
     if (warnedStore) return;
@@ -56,7 +66,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
   const status = (selection: Selection) => {
     deps.setStatus(selection.kind === "account"
       ? `claude: ${selection.account.name}${selection.probe ? " (probe)" : ""}`
-      : undefined);
+      : selection.reason === "all-need-attention" ? "claude: no usable accounts" : undefined);
   };
   const apply = (state: StateFile, selection: Extract<Selection, { kind: "account" }>) => {
     applyAccountEnv(selection.account, env);
@@ -78,8 +88,60 @@ export function createRotationRuntime(deps: RotationDependencies) {
     status(selection);
   };
 
+  const startCheck = (account: AccountEntry) => {
+    if (unmanaged || !deps.checkAccount) return;
+    const controller = new AbortController();
+    const mine = generation;
+    const live = () => mine === generation && !controller.signal.aborted;
+    pending.add(controller);
+    void (async () => {
+      try {
+        const result = await deps.checkAccount!(account, controller.signal);
+        if (!live()) return;
+        if (result.kind === "unavailable") {
+          if (!warnedAuth) {
+            warnedAuth = true;
+            deps.notify("Claude auth status unavailable — account state unchanged", "info");
+          }
+          return;
+        }
+        let mismatch: string | undefined;
+        const state = await deps.store.mutate(current => {
+          if (!live() || !current.accounts.some(a => a.name === account.name && a.configDir === account.configDir)) return current;
+          if (result.kind === "logged-out") return setNeedsAttention(current, account.name, "logged out");
+          const identity = current.state[account.name]?.identity;
+          if (identity == null) return setIdentity(current, account.name, result.identity);
+          if (identity !== result.identity) {
+            mismatch = `identity changed: ${identity} -> ${result.identity}`;
+            return setNeedsAttention(current, account.name, mismatch);
+          }
+          return current;
+        });
+        if (!live()) return;
+        if (mismatch) deps.notify(`Claude account "${account.name}" needs attention: ${mismatch}`, "warning");
+        // Validation updates status without changing an in-flight request's attribution.
+        select(state, false);
+      } catch {
+        if (live()) warnStore();
+      } finally {
+        pending.delete(controller);
+      }
+    })();
+  };
+
   return {
+    get unmanaged() { return unmanaged; },
+    get appliedAccountName() { return lastApplied?.account.name; },
+    checkAccount: startCheck,
+    onSessionShutdown() { stopChecks(); },
+    async refresh(): Promise<void> {
+      if (unmanaged) return;
+      select(await deps.store.load(), false);
+    },
     async onSessionStart(): Promise<void> {
+      stopChecks();
+      warnedAuth = false;
+      const mine = generation;
       unmanaged = false;
       launchChecked = false;
       warnedStore = false;
@@ -87,7 +149,10 @@ export function createRotationRuntime(deps: RotationDependencies) {
       lastApplied = undefined;
       launchEnv = { CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR };
       try {
-        select(await deps.store.load(), false);
+        const state = await deps.store.load();
+        if (mine !== generation) return;
+        select(state, false);
+        if (!unmanaged) for (const account of state.accounts) startCheck(account);
       } catch {
         warnStore();
       }
@@ -131,8 +196,11 @@ export function createRotationRuntime(deps: RotationDependencies) {
                 ? [{ name: account.name, until: item.cooldownUntil }] : [];
             });
             const earliest = Math.min(...resets.map(item => item.until));
-            deps.setStatus(Number.isFinite(earliest) ? `claude: no accounts · back ${localTime(earliest)}` : undefined);
-            const errorMessage = `Claude quota exceeded on all accounts — ${resets.map(item => `${item.name} resets ${localTime(item.until)}`).join(", ")}`;
+            deps.setStatus(Number.isFinite(earliest) ? `claude: no accounts · back ${localTime(earliest)}` : "claude: no usable accounts");
+            const detail = resets.length > 0
+              ? resets.map(item => `${item.name} resets ${localTime(item.until)}`).join(", ")
+              : `no usable accounts (${state.accounts.map(account => `${account.name}: needs attention`).join(", ")})`;
+            const errorMessage = `Claude quota exceeded on all accounts — ${detail}`;
             deps.notify(errorMessage, "error");
             return { ...message, errorMessage };
           }

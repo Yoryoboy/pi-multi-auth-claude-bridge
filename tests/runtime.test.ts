@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRotationRuntime } from "../src/runtime.js";
-import { addAccount, setCooldown, setPreferred, type StateFile, type StoreMutation } from "../src/accounts/store.js";
+import { addAccount, setCooldown, setPreferred, setNeedsAttention, type StateFile, type StoreMutation } from "../src/accounts/store.js";
 
 const now = new Date(2026, 0, 2, 12).getTime();
 const time = (ms: number) => `${String(new Date(ms).getHours()).padStart(2, "0")}:${String(new Date(ms).getMinutes()).padStart(2, "0")}`;
@@ -87,6 +87,14 @@ describe("rotation runtime", () => {
     expect(h.setStatus).toHaveBeenLastCalledWith(`claude: no accounts · back ${time(now + 3_600_000)}`);
     expect(h.env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(h.notify).toHaveBeenLastCalledWith(replacement!.errorMessage, "error");
+  });
+  it("reports no usable accounts when reset candidates disappear behind attention flags", async () => {
+    const h = harness(setNeedsAttention(accounts(), "work", "logged out"));
+    await h.runtime.onSessionStart(); await h.runtime.beforeRequest();
+    h.replace(setNeedsAttention(h.state, "main", "identity changed"));
+    const result = await h.runtime.onAssistantMessageEnd(error());
+    expect(result?.errorMessage).toBe("Claude quota exceeded on all accounts — no usable accounts (main: needs attention, work: needs attention)");
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: no usable accounts");
   });
   it("probes earliest reset on a new request and self-corrects rejected probes", async () => {
     const until = now + 3_600_000;
