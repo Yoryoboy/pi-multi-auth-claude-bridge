@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import type { RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import {
-  addAccount, removeAccount, setPreferred, clearCooldown, setNeedsAttention, normalizeConfigDir,
+  addAccount, removeAccount, setPreferred, clearCooldown, setNeedsAttention, setIdentity, normalizeConfigDir,
   type AccountEntry,
 } from "./accounts/store.js";
 import { availability, priorityOrder } from "./accounts/selector.js";
@@ -74,10 +74,15 @@ export function createAccountCommand(deps: CommandDependencies): Omit<Registered
         await deps.store.mutate(state => {
           if (subcommand === "use") return setPreferred(state, name);
           if (subcommand === "clear") return setPreferred(state, null);
-          if (subcommand === "reset") return setNeedsAttention(clearCooldown(state, name), name, null);
+          // Forget the cached identity too: otherwise a deliberate re-login is flagged again on the next check.
+          if (subcommand === "reset") return setIdentity(setNeedsAttention(clearCooldown(state, name), name, null), name, null);
           return removeAccount(state, name);
         });
         await deps.runtime.refresh();
+        if (subcommand === "reset") {
+          const account = (await deps.store.load()).accounts.find(a => a.name === name);
+          if (account) deps.checkAccount(account);
+        }
         notify(`Claude account ${subcommand}${name ? `: ${name}` : ""} applied; automatic failover remains enabled.`);
       } catch (error) {
         notify(`${error instanceof Error ? error.message : "Account operation failed"}\n${usage}`, "error");

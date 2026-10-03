@@ -43,6 +43,13 @@ describe("claude-account command", () => {
     await h.command.handler("clear", h.ctx);
     expect(h.state.preferred).toBeNull(); expect(h.env.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
+  it("reset forgets the cached identity and re-checks the account so a deliberate re-login is accepted", async () => {
+    const h = harness(); await h.runtime.onSessionStart();
+    h.replace(setNeedsAttention(setIdentity(h.state, "work", "old"), "work", "identity changed: old -> new"));
+    await h.command.handler("reset work", h.ctx);
+    expect(h.state.state.work.identity).toBeNull();
+    expect(h.check).toHaveBeenCalledWith({ name: "work", configDir: "/work" });
+  });
   it("add validates directory, registers only, prints login guidance and checks in background", async () => {
     const h = harness();
     await h.command.handler("add extra /extra", h.ctx);
@@ -72,7 +79,8 @@ describe("claude-account command", () => {
     await command.handler(`add bad ${join(dir, "missing")}`, ctx);
     expect((await store.load()).accounts).toHaveLength(1);
     await command.handler("remove work", ctx); expect((await store.load()).accounts).toEqual([]);
-    expect(check).toHaveBeenCalledOnce();
+    // add and reset each trigger one background check.
+    expect(check).toHaveBeenCalledTimes(2);
   });
   it("remove refreshes selection and preference", async () => {
     const h = harness(); await h.runtime.onSessionStart();
