@@ -64,6 +64,11 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
   - README (install, add account, symlink advice, limits, policy risk); manual checklist: mid-session switch, real exhaustion text capture, all-exhausted behavior.
   - Acceptance: checklist executed and results recorded here.
 
+## Follow-ups
+- R3-001: `onCompromised` throws from a proper-lockfile timer callback, which may surface as an uncaught exception inside the Pi process. Revisit before ODD-5 wiring (log + degrade instead of throw).
+- R3-002: store test coverage advisory; revisit with R3-001.
+
 ## Evidence
 - ODD-1: `npm install` ok (3 audit warnings, untouched); `npm run typecheck` pass; `npm test` 1/1 pass; `pi -e ./src/index.ts --list-models` exit 0 with no extension errors. No meaningful RED for a no-op scaffold; entry test asserts no registration and no env mutation. Commit: `5650a3c` (`chore: scaffold claude account rotation extension`).
-- ODD-2: delegated to `gentle-ai-worker` (store + tests, two non-trivial files). RED: module missing; GREEN: `tests/store.test.ts` 21/21, full suite 22/22; `npm run typecheck` pass. Store at `~/.pi/agent/pi-multi-auth-claude-bridge/state.json`, metadata only. Commit: recorded in the next task entry.
+- ODD-2: delegated to `gentle-ai-worker` (store + tests, two non-trivial files). RED: module missing; GREEN: `tests/store.test.ts` 21/21, full suite 22/22; `npm run typecheck` pass. Store at `~/.pi/agent/pi-multi-auth-claude-bridge/state.json`, metadata only. Commit: `afe8457` (`feat(accounts): add shared account state store`). Native review `review-2903551fb2b9c104` (medium, reliability lens): approved and acknowledged; advisory findings R3-001 (`store.ts:265-282`, lock handling) and R3-002 (`store.test.ts:20-100`) recorded as follow-ups.
+- ODD-3: delegated to `gentle-ai-worker` (selector, env helper, two test files). RED: modules missing; GREEN: focused 13/13, full suite 35/35; `npm run typecheck` pass. Commit: recorded in the next task entry.
