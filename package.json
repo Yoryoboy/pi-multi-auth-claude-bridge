@@ -1,0 +1,31 @@
+{
+  "name": "pi-multi-auth-claude-bridge",
+  "version": "0.1.0",
+  "description": "Pi extension that rotates Claude subscription accounts for pi-claude-bridge by switching CLAUDE_CONFIG_DIR",
+  "type": "module",
+  "license": "MIT",
+  "author": "Yoryoboy",
+  "keywords": ["pi-package", "pi-extension", "claude", "claude-bridge", "multi-account"],
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@types/node": "^22.19.19",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}
