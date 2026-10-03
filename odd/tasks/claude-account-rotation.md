@@ -45,7 +45,7 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - [x] **ODD-1 — Scaffold the package**
   - `git init`, `package.json`, `tsconfig.json`, Vitest, `pi.extensions` entry, README skeleton.
   - Acceptance: `npm run typecheck` and an empty `npm test` pass; extension loads in Pi as a no-op.
-- [ ] **ODD-2 — Account registry and shared state store**
+- [x] **ODD-2 — Account registry and shared state store**
   - Accounts (`name`, `configDir|null`, order), preference, cooldowns, needs-attention; file mode 0600, atomic write + lock; no secrets.
   - Acceptance: tests for round-trip, concurrent writers, invalid file recovery.
 - [ ] **ODD-3 — Active account selector and env application**
@@ -65,4 +65,5 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
   - Acceptance: checklist executed and results recorded here.
 
 ## Evidence
-- ODD-1: `npm install` ok (3 audit warnings, untouched); `npm run typecheck` pass; `npm test` 1/1 pass; `pi -e ./src/index.ts --list-models` exit 0 with no extension errors. No meaningful RED for a no-op scaffold; entry test asserts no registration and no env mutation. Commit: see ODD-2 entry (recorded after commit).
+- ODD-1: `npm install` ok (3 audit warnings, untouched); `npm run typecheck` pass; `npm test` 1/1 pass; `pi -e ./src/index.ts --list-models` exit 0 with no extension errors. No meaningful RED for a no-op scaffold; entry test asserts no registration and no env mutation. Commit: `5650a3c` (`chore: scaffold claude account rotation extension`).
+- ODD-2: delegated to `gentle-ai-worker` (store + tests, two non-trivial files). RED: module missing; GREEN: `tests/store.test.ts` 21/21, full suite 22/22; `npm run typecheck` pass. Store at `~/.pi/agent/pi-multi-auth-claude-bridge/state.json`, metadata only. Commit: recorded in the next task entry.
