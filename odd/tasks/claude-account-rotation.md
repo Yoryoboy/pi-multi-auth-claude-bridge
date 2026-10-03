@@ -48,10 +48,10 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - [x] **ODD-2 — Account registry and shared state store**
   - Accounts (`name`, `configDir|null`, order), preference, cooldowns, needs-attention; file mode 0600, atomic write + lock; no secrets.
   - Acceptance: tests for round-trip, concurrent writers, invalid file recovery.
-- [ ] **ODD-3 — Active account selector and env application**
+- [x] **ODD-3 — Active account selector and env application**
   - Compute active account; apply/delete `CLAUDE_CONFIG_DIR`; warn when launched with an unregistered value.
   - Acceptance: tests for preference, cooldown expiry, needs-attention, all-unavailable earliest-reset probe.
-- [ ] **ODD-4 — Error classifier and reset parser**
+- [x] **ODD-4 — Error classifier and reset parser**
   - Classes above; locale time parsing; +24h self-correction; 1h fallback.
   - Acceptance: fixture-driven tests for each class and locale formats (`18:30:00`, `6:30:00 PM`).
 - [ ] **ODD-5 — Extension wiring**
@@ -71,4 +71,5 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 ## Evidence
 - ODD-1: `npm install` ok (3 audit warnings, untouched); `npm run typecheck` pass; `npm test` 1/1 pass; `pi -e ./src/index.ts --list-models` exit 0 with no extension errors. No meaningful RED for a no-op scaffold; entry test asserts no registration and no env mutation. Commit: `5650a3c` (`chore: scaffold claude account rotation extension`).
 - ODD-2: delegated to `gentle-ai-worker` (store + tests, two non-trivial files). RED: module missing; GREEN: `tests/store.test.ts` 21/21, full suite 22/22; `npm run typecheck` pass. Store at `~/.pi/agent/pi-multi-auth-claude-bridge/state.json`, metadata only. Commit: `afe8457` (`feat(accounts): add shared account state store`). Native review `review-2903551fb2b9c104` (medium, reliability lens): approved and acknowledged; advisory findings R3-001 (`store.ts:265-282`, lock handling) and R3-002 (`store.test.ts:20-100`) recorded as follow-ups.
-- ODD-3: delegated to `gentle-ai-worker` (selector, env helper, two test files). RED: modules missing; GREEN: focused 13/13, full suite 35/35; `npm run typecheck` pass. Commit: recorded in the next task entry.
+- ODD-3: delegated to `gentle-ai-worker` (selector, env helper, two test files). RED: modules missing; GREEN: focused 13/13, full suite 35/35; `npm run typecheck` pass. Commit: `b865371` (`feat(accounts): select active account and apply CLAUDE_CONFIG_DIR`). Native review `review-df1da7276ca30e95`: approved, no findings, acknowledged.
+- ODD-4: delegated to `gentle-ai-worker` (classifier, reset parser, two test files). RED: modules missing; GREEN: focused 67/67, full suite 102/102; `npm run typecheck` pass. Commit: recorded in the next task entry.
