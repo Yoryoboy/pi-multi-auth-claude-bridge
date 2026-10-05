@@ -62,6 +62,10 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
 
    `add` only registers the directory; it never starts a login. At session start, every account is checked in the background with `claude auth status`. Logged-out accounts, or accounts whose identity changed, are marked *needs attention*. A separate background check warns once with the offending accounts and symlink fix commands when their `projects/` directories are not shared. It never changes files; use the merge-safe steps above to preserve existing history.
 
+## Menu
+
+`/claude-accounts` (TUI only) opens an arrow-key menu: one row per account with its state and cached limits, plus `Add account`, `Clear preference`, and `Close`. Selecting an account offers `Use`, `Reset`, `Remove` (confirmed), and `Back`. Every action runs through `/claude-account`, so both behave identically.
+
 ## Command
 
 ```
@@ -76,14 +80,18 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
 | `reset <name>` | Clear cooldown, needs-attention, and the cached identity, then re-check |
 | `add` / `remove` | Manage the registry |
 
-The status bar shows `claude: <name>`, `claude: <name> (probe)`, or `claude: no accounts · back HH:MM`.
+The status bar shows `claude: <name> · 5h N% · wk M%`, `claude: <name> · limits unavailable`, `claude: <name> (probe)`, or `claude: no accounts · back HH:MM`. Limits are colored by the higher window: dim up to 75%, warning above 75%, error above 90%.
+
+## Usage limits and credentials
+
+To show limits, the extension reads `claudeAiOauth.accessToken` and `expiresAt` from `<configDir>/.credentials.json` read-only and sends the token only to `https://api.anthropic.com/api/oauth/usage`. It never refreshes, copies, logs, or stores the token; an expired token shows `limits unavailable` until Claude Code renews it. Results are cached for 120 seconds and refreshed at session start, after each turn, and after account changes. The endpoint is undocumented and may change.
 
 If Pi is launched with a `CLAUDE_CONFIG_DIR` that is not registered, the extension warns once and leaves the environment alone for that session.
 
 ## Limits
 
 - Detection is reactive. One request fails per exhaustion, and the Bridge does not expose "approaching limit" warnings without a patch.
-- Reset times arrive as a local wall-clock time without a date. Weekly limits are corrected by probing: if an account is still rejected after its cooldown, the cooldown moves forward by 24 hours.
+- Reset times arrive as a local wall-clock time without a date. Weekly limits are corrected by probing: if an account is still rejected after its cooldown, the cooldown moves forward by whole days. Without reset information, a rejected probe backs off one hour.
 - AskClaude failures are not used for failover.
 
 ## Development
