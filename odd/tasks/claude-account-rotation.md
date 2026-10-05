@@ -93,3 +93,11 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
   - At session start, warn once per account whose `<configDir>/projects` does not resolve to the same real directory as the default account's projects dir; show the exact symlink command. README requires the `projects/` symlink.
   - Acceptance: tests for shared (symlink), not shared, missing dir, default-only registry.
 - ODD-8: delegated to `gentle-ai-worker`. `src/projects-check.ts` (read-only realpath comparison), background startup warning with fix command, README requires the `projects/` symlink. RED: missing module + 4 runtime failures; GREEN: 179/179; typecheck pass. Commit: recorded in the next entry.
+
+## Phase 2 — interactive menu and usage limits (2026-10-05)
+Decision: user accepted a scoped relaxation of the credentials rule — read `<configDir>/.credentials.json` `claudeAiOauth.accessToken`/`expiresAt` read-only, send only to `https://api.anthropic.com/api/oauth/usage` (header `anthropic-beta: oauth-2025-04-20`); never refresh, copy, log, or persist. Expired/missing token → "limits unavailable".
+Verified premise: endpoint returns `five_hour`/`seven_day` `{utilization, resets_at}` (live check 2026-10-05).
+- [ ] **ODD-9 — Usage fetcher** (`src/usage.ts`): token read, fetch, parse, 120s cache, in-flight dedupe; tests with stubbed fs/fetch.
+- [ ] **ODD-10 — Status bar limits**: `claude: main · 5h 42% · wk 18%`, theme colors (dim ≤75, warning >75, error >90); refresh on session_start, turn_end, after menu.
+- [ ] **ODD-11 — `/claude-accounts` menu** (`ctx.ui.select` loop): account rows with state+limits, Add (input), per-account Use/Reset/Remove(confirm)/Back, Close; keep `/claude-account` text command.
+- [ ] **ODD-12 — README** for menu, limits, and the credentials-read scope.
