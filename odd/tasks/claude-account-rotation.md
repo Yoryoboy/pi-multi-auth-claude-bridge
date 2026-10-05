@@ -70,6 +70,7 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - R3-cooldown-regression (`reset.ts:40`): the +24h self-correction is applied to every source (epoch, wall time, fallback) whenever `until <= previousUntil`; review whether it should only apply to wall-time probes, and whether one +24h step is enough when `previousUntil` is further ahead.
 - runtime.ts:135 advisory: fixed in ODD-6 — "no usable accounts (<name>: needs attention)" message and status.
 - `command.ts:39` (argument arity parsing) and `runtime.ts:91` (background check lifecycle): ODD-6 review advisories, unaddressed; revisit after manual e2e.
+- M2 finding (2026-10-05): switching accounts made the Bridge resume its in-memory session id under the new config dir -> `No conversation found` (Bridge REUSE path `index.ts:778-787`). Breaks auto failover too (Pi retry resumes the same id). Fix applied on the host: `~/.claude-work/projects` symlinked to `~/.claude/projects` (16 session files merged, 0 conflicts, backup `~/.claude-work/projects.bak-20261005`). TODO: extension warns when a registered account does not share `projects/`; README must require the `projects/` symlink (it currently says never link it).
 
 ## Evidence
 - ODD-1: `npm install` ok (3 audit warnings, untouched); `npm run typecheck` pass; `npm test` 1/1 pass; `pi -e ./src/index.ts --list-models` exit 0 with no extension errors. No meaningful RED for a no-op scaffold; entry test asserts no registration and no env mutation. Commit: `5650a3c` (`chore: scaffold claude account rotation extension`).
@@ -82,8 +83,8 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - ODD-7 (part 1): README rewritten (how it works, setup incl. settings.json symlink, command table, limits, policy risk). Passive documentation; no test-first applicable. Manual e2e checklist pending with the user.
 
 ## Manual e2e checklist (ODD-7)
-- [ ] M1 Load + register: `gentle-shell -e <repo>/src/index.ts`; `/claude-account add main default`, `add work ~/.claude-work`; `list` shows both identities after the background check.
-- [ ] M2 Mid-session switch: one message on `main`, then `/claude-account use work`, one more message; a new Bridge session appears under `~/.claude-work/projects/` for the cwd.
-- [ ] M3 Logged-out account: `add broken <empty dir>`; it becomes `needs attention: logged out` and is never selected.
+- [x] M1 Load + register: `gentle-shell -e <repo>/src/index.ts`; `/claude-account add main default`, `add work ~/.claude-work`; `list` shows both identities after the background check. Passed 2026-10-05: `main · default · 93jads · active`, `work · ~/.claude-work · 93jadsarg · available`.
+- [x] M2 Mid-session switch: one message on `main`, then `/claude-account use work`, one more message; a new Bridge session appears under `~/.claude-work/projects/` for the cwd. Passed 2026-10-05 after the `projects/` symlink: main→work and work→main switches mid-session, each next message answered with no error; status bar followed the switch.
+- [x] M3 Logged-out account: `add broken <empty dir>`; it becomes `needs attention: logged out` and is never selected. Passed 2026-10-05: `broken` flagged `needs attention: logged out`, never selected; removed afterwards.
 - [ ] M4 Real exhaustion: capture the actual error text and notification when an account hits its limit naturally; confirm failover and Pi retry on the next account.
 - [ ] M5 All exhausted: confirm the non-retryable message and status (natural occurrence only).
