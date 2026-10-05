@@ -35,7 +35,23 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
    ln -s ~/.claude/settings.json ~/.claude-work/settings.json
    ```
 
-   Never link `.credentials.json`, `.claude.json`, `projects/`, `sessions/`, or `plugins/`.
+   **`projects/` MUST be symlinked to the default account's `~/.claude/projects/`.** The Bridge resumes sessions by id, and the session files live under the active config directory; separate histories break mid-session switching and automatic failover.
+
+   With Claude Code and Pi stopped, back up any existing history and merge only non-conflicting files before linking (GNU `cp`; keep the backup for conflicts):
+
+   ```sh
+   mkdir -p "$HOME/.claude/projects"
+   # If projects already exists, first move it aside and merge:
+   mv "$HOME/.claude-work/projects" "$HOME/.claude-work/projects.bak" &&
+     cp -a --update=none "$HOME/.claude-work/projects.bak/." "$HOME/.claude/projects/" &&
+     ln -s "$HOME/.claude/projects" "$HOME/.claude-work/projects"
+   # If projects does not exist, only run:
+   # ln -s "$HOME/.claude/projects" "$HOME/.claude-work/projects"
+   ```
+
+   Use a fresh backup name if `projects.bak` already exists; do not rerun this on an already shared symlink. Without a registered default account, share the first registered account's projects directory instead.
+
+   Never link `.credentials.json`, `.claude.json`, `sessions/`, or `plugins/`.
 
 3. Register the accounts in Pi, in priority order:
 
@@ -44,7 +60,7 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
    /claude-account add work ~/.claude-work
    ```
 
-   `add` only registers the directory; it never starts a login. At session start, every account is checked in the background with `claude auth status`. Logged-out accounts, or accounts whose identity changed, are marked *needs attention*.
+   `add` only registers the directory; it never starts a login. At session start, every account is checked in the background with `claude auth status`. Logged-out accounts, or accounts whose identity changed, are marked *needs attention*. A separate background check warns once with the offending accounts and symlink fix commands when their `projects/` directories are not shared. It never changes files; use the merge-safe steps above to preserve existing history.
 
 ## Command
 

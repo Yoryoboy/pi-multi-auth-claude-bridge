@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRotationRuntime } from "../src/runtime.js";
+import type { ProjectsIssue } from "../src/projects-check.js";
 import { addAccount, setCooldown, setPreferred, setNeedsAttention, type StateFile, type StoreMutation } from "../src/accounts/store.js";
 
 const now = new Date(2026, 0, 2, 12).getTime();
@@ -7,7 +8,7 @@ const time = (ms: number) => `${String(new Date(ms).getHours()).padStart(2, "0")
 const empty = (): StateFile => ({ version: 1, accounts: [], preferred: null, state: {} });
 const accounts = () => addAccount(addAccount(empty(), "main", null), "work", "/work");
 const error = (errorMessage = "Claude rate limit (five_hour)", provider = "claude-bridge") => ({ role: "assistant", provider, stopReason: "error", errorMessage, content: [] });
-function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}) {
+function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedProjects = vi.fn(async (): Promise<ProjectsIssue[]> => [])) {
   let state = initial;
   const store = {
     load: vi.fn(async () => structuredClone(state)),
@@ -15,11 +16,75 @@ function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}) {
   };
   const notify = vi.fn();
   const setStatus = vi.fn();
-  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus });
+  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, checkSharedProjects });
   return { runtime, store, env, notify, setStatus, get state() { return state; }, replace(next: StateFile) { state = next; } };
 }
 
 describe("rotation runtime", () => {
+  it("warns once with every offending account and shell-safe fix commands", async () => {
+    const initial = addAccount(addAccount(addAccount(empty(), "main", null), "work", "/work dir"), "other", "/other' dir");
+    const check = vi.fn(async (): Promise<ProjectsIssue[]> => [
+      { name: "work", configDir: "/work dir", reason: "not-shared" },
+      { name: "other", configDir: "/other' dir", reason: "missing" },
+    ]);
+    const h = harness(initial, { HOME: "/home/test user" }, check);
+    await h.runtime.onSessionStart();
+    await vi.waitFor(() => expect(h.notify).toHaveBeenCalledTimes(1));
+    expect(check).toHaveBeenCalledWith(initial.accounts, { homeDir: "/home/test user" });
+    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining('Claude account "work" does not share session history with "main"; switching accounts will fail to resume. Fix: mv \'/work dir/projects\' \'/work dir/projects.bak\' && ln -s \'/home/test user/.claude/projects\' \'/work dir/projects\''), "warning");
+    expect(h.notify.mock.calls[0][0]).toContain('Claude account "other"');
+    // Missing directories need no move; shell apostrophes must remain literal.
+    expect(h.notify.mock.calls[0][0]).toContain(`Fix: ln -s '/home/test user/.claude/projects' '/other'"'"' dir/projects'`);
+  });
+  it("does not warn when projects are shared", async () => {
+    const h = harness();
+    await h.runtime.onSessionStart();
+    await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+  it("runs projects checks in the background and ignores results after shutdown", async () => {
+    let finish!: (issues: ProjectsIssue[]) => void;
+    const check = vi.fn(() => new Promise<ProjectsIssue[]>(resolve => { finish = resolve; }));
+    const h = harness(accounts(), {}, check);
+    await h.runtime.onSessionStart();
+    expect(check).toHaveBeenCalledTimes(1);
+    h.runtime.onSessionShutdown();
+    finish([{ name: "work", configDir: "/work", reason: "not-shared" }]);
+    await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+  it("ignores stale projects results after a new session starts", async () => {
+    let finish!: (issues: ProjectsIssue[]) => void;
+    const check = vi.fn(async (): Promise<ProjectsIssue[]> => []);
+    check.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const h = harness(accounts(), {}, check);
+    await h.runtime.onSessionStart();
+    await h.runtime.onSessionStart();
+    finish([{ name: "work", configDir: "/work", reason: "not-shared" }]);
+    await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+  it("skips projects checks in unmanaged mode or without accounts", async () => {
+    const check = vi.fn(async (): Promise<ProjectsIssue[]> => []);
+    await harness(accounts(), { CLAUDE_CONFIG_DIR: "/foreign" }, check).runtime.onSessionStart();
+    await harness(empty(), {}, check).runtime.onSessionStart();
+    expect(check).not.toHaveBeenCalled();
+  });
+  it("does not throw or notify when the background projects check fails", async () => {
+    const check = vi.fn(async (): Promise<ProjectsIssue[]> => { throw new Error("check unavailable"); });
+    const h = harness(accounts(), {}, check);
+    await expect(h.runtime.onSessionStart()).resolves.toBeUndefined();
+    await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+  it("uses the first account in warning commands when there is no default", async () => {
+    const initial = addAccount(addAccount(empty(), "first", "/first"), "work", "/work");
+    const check = vi.fn(async (): Promise<ProjectsIssue[]> => [{ name: "work", configDir: "/work", reason: "not-shared" }]);
+    const h = harness(initial, {}, check);
+    await h.runtime.onSessionStart();
+    await vi.waitFor(() => expect(h.notify).toHaveBeenCalledTimes(1));
+    expect(h.notify).toHaveBeenCalledWith('Claude account "work" does not share session history with "first"; switching accounts will fail to resume. Fix: mv /work/projects /work/projects.bak && ln -s /first/projects /work/projects', "warning");
+  });
   it("does nothing to env with no accounts and clears status", async () => {
     const h = harness(empty(), { CLAUDE_CONFIG_DIR: "/unregistered" });
     await h.runtime.onSessionStart();

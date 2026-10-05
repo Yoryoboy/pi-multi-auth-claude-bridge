@@ -89,6 +89,7 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - [ ] M4 Real exhaustion: capture the actual error text and notification when an account hits its limit naturally; confirm failover and Pi retry on the next account.
 - [ ] M5 All exhausted: confirm the non-retryable message and status (natural occurrence only).
 
-- [ ] **ODD-8 — Shared `projects/` check and README fix** (added after M2 finding)
+- [x] **ODD-8 — Shared `projects/` check and README fix** (added after M2 finding)
   - At session start, warn once per account whose `<configDir>/projects` does not resolve to the same real directory as the default account's projects dir; show the exact symlink command. README requires the `projects/` symlink.
   - Acceptance: tests for shared (symlink), not shared, missing dir, default-only registry.
+- ODD-8: delegated to `gentle-ai-worker`. `src/projects-check.ts` (read-only realpath comparison), background startup warning with fix command, README requires the `projects/` symlink. RED: missing module + 4 runtime failures; GREEN: 179/179; typecheck pass. Commit: recorded in the next entry.

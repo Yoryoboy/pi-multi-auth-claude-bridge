@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { projectsReference, type checkSharedProjects } from "./projects-check.js";
 import {
   setCooldown, setNeedsAttention, setIdentity,
   type AccountEntry, type StateFile, type StoreMutation,
@@ -19,12 +22,17 @@ export interface RotationDependencies {
   notify(message: string, level: "info" | "warning" | "error"): void;
   setStatus(text: string | undefined): void;
   checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
+  checkSharedProjects?: typeof checkSharedProjects;
 }
 export interface RotationMessage {
   role: string;
   provider?: string;
   stopReason?: string;
   errorMessage?: string;
+}
+
+function shellQuote(path: string): string {
+  return /^[a-zA-Z0-9_./-]+$/.test(path) ? path : `'${path.replace(/'/g, `'"'"'`)}'`;
 }
 
 function localTime(timestamp: number): string {
@@ -129,6 +137,33 @@ export function createRotationRuntime(deps: RotationDependencies) {
     })();
   };
 
+  const startProjectsCheck = (accounts: AccountEntry[]) => {
+    if (unmanaged || accounts.length === 0 || !deps.checkSharedProjects) return;
+    const controller = new AbortController();
+    const mine = generation;
+    pending.add(controller);
+    void (async () => {
+      try {
+        const homeDir = env.HOME ?? homedir();
+        const reference = projectsReference(accounts, homeDir);
+        if (!reference) return;
+        const issues = await deps.checkSharedProjects!(accounts, { homeDir });
+        if (mine !== generation || controller.signal.aborted || issues.length === 0) return;
+        const warnings = issues.map(issue => {
+          const projects = join(issue.configDir, "projects");
+          const move = issue.reason === "missing" ? "" : `mv ${shellQuote(projects)} ${shellQuote(`${projects}.bak`)} && `;
+          const fix = `${move}ln -s ${shellQuote(reference.path)} ${shellQuote(projects)}`;
+          return `Claude account "${issue.name}" does not share session history with "${reference.account.name}"; switching accounts will fail to resume. Fix: ${fix}`;
+        });
+        deps.notify(warnings.join("\n"), "warning");
+      } catch {
+        // A failed advisory check must not interfere with account rotation.
+      } finally {
+        pending.delete(controller);
+      }
+    })();
+  };
+
   return {
     get unmanaged() { return unmanaged; },
     get appliedAccountName() { return lastApplied?.account.name; },
@@ -152,7 +187,10 @@ export function createRotationRuntime(deps: RotationDependencies) {
         const state = await deps.store.load();
         if (mine !== generation) return;
         select(state, false);
-        if (!unmanaged) for (const account of state.accounts) startCheck(account);
+        if (!unmanaged) {
+          startProjectsCheck(state.accounts);
+          for (const account of state.accounts) startCheck(account);
+        }
       } catch {
         warnStore();
       }

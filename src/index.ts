@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkAccount, type AuthStatus } from "./auth-status.js";
 import { createAccountCommand } from "./command.js";
+import { checkSharedProjects } from "./projects-check.js";
 import { createAccountStore, type AccountEntry } from "./accounts/store.js";
 import { createRotationRuntime, type RotationStore } from "./runtime.js";
 
@@ -9,6 +10,7 @@ export interface ExtensionDependencies {
   now?: () => number;
   env?: NodeJS.ProcessEnv;
   checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
+  checkSharedProjects?: typeof checkSharedProjects;
 }
 
 /**
@@ -23,6 +25,7 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
   const store = (deps.createStore ?? createAccountStore)();
   const runtime = createRotationRuntime({
     store,
+    checkSharedProjects: deps.checkSharedProjects ?? checkSharedProjects,
     checkAccount: deps.checkAccount ?? ((account, signal) => checkAccount(account, { env: deps.env, signal })),
     now: deps.now ?? Date.now,
     env: deps.env,
