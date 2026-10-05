@@ -50,6 +50,20 @@ describe("computeCooldownUntil", () => {
     expect(computeCooldownUntil(quota("18:30", null, type), now, computed - 1)).toBe(computed);
   });
 
+  it("keeps rolling wall time by whole days until it passes the previous cooldown", () => {
+    const computed = wallTime(18, 30);
+    expect(computeCooldownUntil(quota("18:30"), now, computed + 2 * day)).toBe(computed + 3 * day);
+  });
+
+  it("never self-corrects an epoch or fallback cooldown", () => {
+    expect(computeCooldownUntil(quota(null, now + 2 * hour), now, now + 5 * hour)).toBe(now + 2 * hour);
+    expect(computeCooldownUntil(quota(null), now, now - hour)).toBe(now + hour);
+  });
+
+  it("steps a fallback cooldown one hour past a stale cooldown", () => {
+    expect(computeCooldownUntil(quota(null), now, now + hour)).toBe(now + 2 * hour);
+  });
+
   it("clamps epoch and self-correction to eight days", () => {
     expect(computeCooldownUntil(quota(null, now + 20 * day), now, null)).toBe(now + 8 * day);
     expect(computeCooldownUntil(quota(null, now + 8 * day), now, now + 8 * day)).toBe(now + 8 * day);

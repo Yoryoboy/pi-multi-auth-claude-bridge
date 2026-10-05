@@ -34,9 +34,15 @@ function nextWallTime(text: string | null, now: number): number | null {
 }
 
 export function computeCooldownUntil(c: Exhausted, now: number, previousUntil: number | null): number {
-  let until = c.resetEpochMs !== null && Number.isFinite(c.resetEpochMs) && c.resetEpochMs > now
-    ? c.resetEpochMs
-    : nextWallTime(c.resetText, now) ?? now + FALLBACK_COOLDOWN_MS;
-  if (previousUntil !== null && until <= previousUntil) until += DAY_MS;
-  return Math.min(until, now + MAX_COOLDOWN_MS);
+  const cap = now + MAX_COOLDOWN_MS;
+  if (c.resetEpochMs !== null && Number.isFinite(c.resetEpochMs) && c.resetEpochMs > now) {
+    return Math.min(c.resetEpochMs, cap);
+  }
+  let until = nextWallTime(c.resetText, now);
+  // Without reset info, step past any stale cooldown so a rejected probe backs off.
+  if (until === null) return Math.min(Math.max(now, previousUntil ?? now) + FALLBACK_COOLDOWN_MS, cap);
+  // A bare wall time cannot name its day; if it does not move past the stale
+  // cooldown, the limit resets on a later day.
+  while (previousUntil !== null && until <= previousUntil && until < cap) until += DAY_MS;
+  return Math.min(until, cap);
 }

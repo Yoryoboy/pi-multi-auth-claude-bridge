@@ -168,7 +168,7 @@ describe("rotation runtime", () => {
     await h.runtime.beforeRequest();
     expect(h.setStatus).toHaveBeenLastCalledWith("claude: main (probe)");
     await h.runtime.onAssistantMessageEnd(error());
-    expect(h.state.state.main.cooldownUntil).toBe(until + 86_400_000);
+    expect(h.state.state.main.cooldownUntil).toBe(until + 3_600_000);
   });
   it("marks account problems for attention without switching", async () => {
     const h = harness();
