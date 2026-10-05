@@ -99,5 +99,5 @@ Decision: user accepted a scoped relaxation of the credentials rule — read `<c
 Verified premise: endpoint returns `five_hour`/`seven_day` `{utilization, resets_at}` (live check 2026-10-05).
 - [x] **ODD-9 — Usage fetcher** (`src/usage.ts`): token read, fetch, parse, 120s cache, in-flight dedupe; tests with stubbed fs/fetch.
 - [x] **ODD-10 — Status bar limits**: `claude: main · 5h 42% · wk 18%`, theme colors (dim ≤75, warning >75, error >90); refresh on session_start, turn_end, after menu.
-- [ ] **ODD-11 — `/claude-accounts` menu** (`ctx.ui.select` loop): account rows with state+limits, Add (input), per-account Use/Reset/Remove(confirm)/Back, Close; keep `/claude-account` text command.
+- [x] **ODD-11 — `/claude-accounts` menu** (`ctx.ui.select` loop): account rows with state+limits, Add (input), per-account Use/Reset/Remove(confirm)/Back, Close; keep `/claude-account` text command.
 - [ ] **ODD-12 — README** for menu, limits, and the credentials-read scope.

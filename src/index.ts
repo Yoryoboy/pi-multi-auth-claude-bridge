@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkAccount, type AuthStatus } from "./auth-status.js";
 import { createAccountCommand } from "./command.js";
+import { runAccountMenu } from "./menu.js";
 import { checkSharedProjects } from "./projects-check.js";
 import { createAccountStore, type AccountEntry } from "./accounts/store.js";
 import { createRotationRuntime, type RotationStore } from "./runtime.js";
@@ -26,9 +27,10 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
   let context: ExtensionContext | undefined;
   const store = (deps.createStore ?? createAccountStore)();
   const usageCache = createUsageCache({ now: deps.now });
+  const getUsage = deps.getUsage ?? usageCache.get;
   const runtime = createRotationRuntime({
     store,
-    getUsage: deps.getUsage ?? usageCache.get,
+    getUsage,
     checkSharedProjects: deps.checkSharedProjects ?? checkSharedProjects,
     checkAccount: deps.checkAccount ?? ((account, signal) => checkAccount(account, { env: deps.env, signal })),
     now: deps.now ?? Date.now,
@@ -74,6 +76,26 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
       context = ctx;
       await command.handler(args, ctx);
       await runtime.refresh().catch(() => { /* Store errors must not break advisory refresh. */ });
+    },
+  });
+  pi.registerCommand("claude-accounts", {
+    description: "Manage Claude accounts in the interactive TUI",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI || ctx.mode !== "tui") {
+        ctx.ui.notify("/claude-accounts requires the interactive TUI. Use /claude-account instead.", "error");
+        return;
+      }
+      context = ctx;
+      try {
+        await runAccountMenu({
+          store, ui: ctx.ui, getUsage,
+          now: deps.now ?? Date.now,
+          appliedAccountName: () => runtime.appliedAccountName,
+          dispatch: args => command.handler(args, ctx),
+        });
+      } finally {
+        await runtime.refresh().catch(() => { /* Store errors must not break advisory refresh. */ });
+      }
     },
   });
 }

@@ -16,6 +16,39 @@ function harness(hasUI = true, checkAccount: (account: AccountEntry, signal: Abo
 }
 
 describe("Pi extension wiring", () => {
+  it("registers the plural TUI command", () => {
+    const h = harness();
+    expect(h.pi.registerCommand).toHaveBeenCalledWith("claude-accounts", expect.objectContaining({ handler: expect.any(Function) }));
+  });
+  it.each([{ hasUI: true, mode: "rpc" }, { hasUI: false, mode: "tui" }, { hasUI: false, mode: "print" }])(
+    "guards the plural menu outside dialog-capable TUI ($hasUI/$mode)", async ({ hasUI, mode }) => {
+      const h = harness(hasUI);
+      const select = vi.fn();
+      const ctx = { ...h.ctx, mode, ui: { ...h.ctx.ui, select } };
+      const command = h.pi.registerCommand.mock.calls.find(([name]) => name === "claude-accounts")?.[1];
+      expect(command).toBeDefined();
+      await command!.handler("", ctx);
+      expect(select).not.toHaveBeenCalled();
+      expect(h.store.load).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("/claude-account"), "error");
+    },
+  );
+  it("dispatches menu actions through the typed handler and refreshes usage after closing", async () => {
+    const getUsage = vi.fn(async (): Promise<UsageResult> => ({ ok: false, reason: "unavailable" }));
+    const h = harness(true, undefined, getUsage);
+    await h.handlers.session_start({}, h.ctx);
+    const select = vi.fn()
+      .mockImplementationOnce(async (_title: string, rows: string[]) => rows[0])
+      .mockResolvedValueOnce("Use")
+      .mockResolvedValueOnce("Close");
+    const command = h.pi.registerCommand.mock.calls.find(([name]) => name === "claude-accounts")?.[1];
+    expect(command).toBeDefined();
+    await command!.handler("", { ...h.ctx, mode: "tui", ui: { ...h.ctx.ui, select } });
+    expect(h.state.preferred).toBe("work");
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith("Claude account use: work applied; automatic failover remains enabled.", "info");
+    expect(getUsage.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(h.ctx.ui.setStatus).toHaveBeenCalledWith("claude-accounts", "claude: work");
+  });
   it("refreshes usage on start, turn end and commands without blocking context; clears on shutdown", async () => {
     const h = harness();
     await h.handlers.session_start({}, h.ctx);
