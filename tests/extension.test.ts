@@ -1,23 +1,49 @@
 import { describe, expect, it, vi } from "vitest";
 import extension from "../src/index.js";
+import type { UsageResult } from "../src/usage.js";
 import type { AuthStatus } from "../src/auth-status.js";
 import { addAccount, removeAccount, setIdentity, type AccountEntry, type StateFile, type StoreMutation } from "../src/accounts/store.js";
 
-function harness(hasUI = true, checkAccount: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus> = vi.fn(async () => ({ kind: "unavailable" as const, reason: "not installed" }))) {
+function harness(hasUI = true, checkAccount: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus> = vi.fn(async () => ({ kind: "unavailable" as const, reason: "not installed" })), getUsage = vi.fn((_name: string, _dir: string | null) => new Promise<UsageResult>(() => {}))) {
   const handlers: Record<string, (...args: any[]) => any> = {};
   const pi = { on: vi.fn((event: string, handler: any) => { handlers[event] = handler; }), registerCommand: vi.fn(), registerProvider: vi.fn() };
   const ctx = { hasUI, ui: { notify: vi.fn(), setStatus: vi.fn() } };
   let state: StateFile = addAccount({ version: 1, accounts: [], preferred: null, state: {} }, "work", "/work");
   const store = { load: vi.fn(async () => state), mutate: vi.fn(async (fn: StoreMutation) => { state = await fn(state); return state; }) };
   const env: NodeJS.ProcessEnv = {};
-  extension(pi as any, { createStore: () => store, env, now: () => 1_000, checkAccount });
-  return { pi, handlers, ctx, env, store, checkAccount, get state() { return state; }, replace(next: StateFile) { state = next; } };
+  extension(pi as any, { createStore: () => store, env, now: () => 1_000, checkAccount, getUsage });
+  return { pi, handlers, ctx, env, store, checkAccount, getUsage, get state() { return state; }, replace(next: StateFile) { state = next; } };
 }
 
 describe("Pi extension wiring", () => {
+  it("refreshes usage on start, turn end and commands without blocking context; clears on shutdown", async () => {
+    const h = harness();
+    await h.handlers.session_start({}, h.ctx);
+    expect(h.getUsage).toHaveBeenCalledTimes(1);
+    await h.handlers.context({}, h.ctx);
+    expect(h.getUsage).toHaveBeenCalledTimes(1);
+    await h.handlers.turn_end({}, h.ctx);
+    expect(h.getUsage).toHaveBeenCalledTimes(2);
+    await h.pi.registerCommand.mock.calls[0][1].handler("list", h.ctx);
+    expect(h.getUsage).toHaveBeenCalledTimes(3);
+    await h.handlers.session_shutdown({}, h.ctx);
+    expect(h.ctx.ui.setStatus).toHaveBeenLastCalledWith("claude-accounts", undefined);
+  });
+  it.each([true, false])("uses theme coloring when available (%s)", async themed => {
+    const getUsage = vi.fn(async (): Promise<UsageResult> => ({ ok: true,
+      fiveHour: { usedPercent: 91, resetsAt: null }, weekly: null,
+    }));
+    const h = harness(true, undefined, getUsage);
+    const fg = vi.fn((level: string, text: string) => `${level}:${text}`);
+    if (themed) Object.assign(h.ctx.ui, { theme: { fg } });
+    await h.handlers.session_start({}, h.ctx);
+    await vi.waitFor(() => expect(h.ctx.ui.setStatus).toHaveBeenLastCalledWith("claude-accounts",
+      `${themed ? "error:" : ""}claude: work · 5h 91% · wk --`));
+    if (themed) expect(fg).toHaveBeenCalledWith("error", "claude: work · 5h 91% · wk --");
+  });
   it("registers lifecycle hooks and command without starting auth checks", () => {
     const h = harness();
-    expect(Object.keys(h.handlers)).toEqual(["session_start", "context", "message_end", "session_shutdown"]);
+    expect(Object.keys(h.handlers)).toEqual(["session_start", "context", "message_end", "turn_end", "session_shutdown"]);
     expect(h.pi.registerCommand).toHaveBeenCalledWith("claude-account", expect.objectContaining({ handler: expect.any(Function), getArgumentCompletions: expect.any(Function) }));
     expect(h.checkAccount).not.toHaveBeenCalled();
     expect(h.pi.registerProvider).not.toHaveBeenCalled();

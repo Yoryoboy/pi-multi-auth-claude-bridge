@@ -80,19 +80,20 @@ export function createUsageCache(deps: UsageDependencies & { ttlMs?: number } = 
   const inFlight = new Map<string, Promise<UsageResult>>();
   return {
     get(accountName: string, configDir: string | null, opts: { force?: boolean } = {}): Promise<UsageResult> {
-      const pending = inFlight.get(accountName);
+      const key = `${accountName}\0${configDir ?? ""}`;
+      const pending = inFlight.get(key);
       if (pending) return pending;
-      const cached = cache.get(accountName);
+      const cached = cache.get(key);
       if (!opts.force && cached && cached.expiresAt > now()) return Promise.resolve(cached.result);
       const request = fetchUsage(configDir, deps).then(result => {
-        if (inFlight.get(accountName) === request) {
-          cache.set(accountName, { result, expiresAt: now() + ttlMs });
+        if (inFlight.get(key) === request) {
+          cache.set(key, { result, expiresAt: now() + ttlMs });
         }
         return result;
       }).finally(() => {
-        if (inFlight.get(accountName) === request) inFlight.delete(accountName);
+        if (inFlight.get(key) === request) inFlight.delete(key);
       });
-      inFlight.set(accountName, request);
+      inFlight.set(key, request);
       return request;
     },
     clear() {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { UsageResult } from "../src/usage.js";
 import { createRotationRuntime } from "../src/runtime.js";
 import type { ProjectsIssue } from "../src/projects-check.js";
 import { addAccount, setCooldown, setPreferred, setNeedsAttention, type StateFile, type StoreMutation } from "../src/accounts/store.js";
@@ -8,7 +9,7 @@ const time = (ms: number) => `${String(new Date(ms).getHours()).padStart(2, "0")
 const empty = (): StateFile => ({ version: 1, accounts: [], preferred: null, state: {} });
 const accounts = () => addAccount(addAccount(empty(), "main", null), "work", "/work");
 const error = (errorMessage = "Claude rate limit (five_hour)", provider = "claude-bridge") => ({ role: "assistant", provider, stopReason: "error", errorMessage, content: [] });
-function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedProjects = vi.fn(async (): Promise<ProjectsIssue[]> => [])) {
+function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedProjects = vi.fn(async (): Promise<ProjectsIssue[]> => []), getUsage?: (name: string, configDir: string | null) => Promise<UsageResult>) {
   let state = initial;
   const store = {
     load: vi.fn(async () => structuredClone(state)),
@@ -16,11 +17,99 @@ function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedP
   };
   const notify = vi.fn();
   const setStatus = vi.fn();
-  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, checkSharedProjects });
+  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, checkSharedProjects, getUsage });
   return { runtime, store, env, notify, setStatus, get state() { return state; }, replace(next: StateFile) { state = next; } };
 }
 
 describe("rotation runtime", () => {
+  it.each([
+    [42.6, 18.2, "5h 43% · wk 18%", "dim"],
+    [75, 0, "5h 75% · wk 0%", "dim"],
+    [0, 75.1, "5h 0% · wk 75%", "warning"],
+    [90, 0, "5h 90% · wk 0%", "warning"],
+    [0, 90.1, "5h 0% · wk 90%", "error"],
+    [null, 40, "5h -- · wk 40%", "dim"],
+    [20, null, "5h 20% · wk --", "dim"],
+    [null, null, "5h -- · wk --", "dim"],
+  ] as const)("formats usage %s/%s with %s and %s", async (five, week, text, level) => {
+    const getUsage = vi.fn(async (): Promise<UsageResult> => ({ ok: true,
+      fiveHour: five === null ? null : { usedPercent: five, resetsAt: null },
+      weekly: week === null ? null : { usedPercent: week, resetsAt: null },
+    }));
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    await vi.waitFor(() => expect(h.setStatus).toHaveBeenLastCalledWith(`claude: main · ${text}`, level));
+    expect(getUsage).toHaveBeenCalledWith("main", null);
+    await h.runtime.beforeRequest();
+    expect(h.setStatus).toHaveBeenLastCalledWith(`claude: main · ${text}`, level);
+    expect(getUsage).toHaveBeenCalledTimes(1);
+  });
+  it.each([false, true])("renders unavailable including rejected usage (%s) and preserves probe", async reject => {
+    const getUsage = vi.fn(async (): Promise<UsageResult> => {
+      if (reject) throw new Error("offline");
+      return { ok: false, reason: "http" };
+    });
+    const initial = setCooldown(setCooldown(accounts(), "main", now + 1000, "rate_limit"), "work", now + 2000, "rate_limit");
+    const h = harness(initial, {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    await vi.waitFor(() => expect(h.setStatus).toHaveBeenLastCalledWith("claude: main (probe) · limits unavailable", "warning"));
+  });
+  it("does not await usage on requests and discards stale results after switching away and back or shutdown", async () => {
+    const finishes: ((result: UsageResult) => void)[] = [];
+    const getUsage = vi.fn(() => new Promise<UsageResult>(resolve => { finishes.push(resolve); }));
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    await h.runtime.beforeRequest();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main");
+    h.replace(setPreferred(h.state, "work"));
+    await h.runtime.refresh();
+    h.replace(setPreferred(h.state, "main"));
+    await h.runtime.beforeRequest();
+    finishes[0]({ ok: false, reason: "http" });
+    finishes[1]({ ok: false, reason: "http" });
+    await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main");
+    h.runtime.onSessionShutdown();
+    finishes[2]({ ok: false, reason: "http" });
+    await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith(undefined);
+  });
+  it("invalidates usage when the same name is re-added with a different directory", async () => {
+    const finishes: ((result: UsageResult) => void)[] = [];
+    const getUsage = vi.fn(() => new Promise<UsageResult>(resolve => { finishes.push(resolve); }));
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    h.replace(addAccount(empty(), "main", "/replacement"));
+    await h.runtime.beforeRequest();
+    expect(getUsage).toHaveBeenLastCalledWith("main", "/replacement");
+    finishes[0]({ ok: false, reason: "http" }); await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main");
+    finishes[1]({ ok: true, fiveHour: null, weekly: null }); await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main · 5h -- · wk --", "dim");
+  });
+  it("keeps the latest refresh result when requests finish out of order", async () => {
+    const finishes: ((result: UsageResult) => void)[] = [];
+    const getUsage = vi.fn(() => new Promise<UsageResult>(resolve => { finishes.push(resolve); }));
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    h.runtime.refreshUsage();
+    finishes[1]({ ok: true, fiveHour: null, weekly: null }); await Promise.resolve();
+    finishes[0]({ ok: false, reason: "http" }); await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main · 5h -- · wk --", "dim");
+  });
+  it("refreshes after automatic failover and ignores pending usage when all accounts exhaust", async () => {
+    const finishes: ((result: UsageResult) => void)[] = [];
+    const getUsage = vi.fn(() => new Promise<UsageResult>(resolve => { finishes.push(resolve); }));
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart(); await h.runtime.beforeRequest();
+    await h.runtime.onAssistantMessageEnd(error());
+    expect(getUsage).toHaveBeenLastCalledWith("work", "/work");
+    finishes[0]({ ok: false, reason: "http" }); await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: work");
+    await h.runtime.beforeRequest(); await h.runtime.onAssistantMessageEnd(error());
+    finishes[1]({ ok: false, reason: "http" }); await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith(`claude: no accounts · back ${time(now + 3_600_000)}`);
+  });
   it("warns once with every offending account and shell-safe fix commands", async () => {
     const initial = addAccount(addAccount(addAccount(empty(), "main", null), "work", "/work dir"), "other", "/other' dir");
     const check = vi.fn(async (): Promise<ProjectsIssue[]> => [

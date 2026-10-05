@@ -4,6 +4,7 @@ import { createAccountCommand } from "./command.js";
 import { checkSharedProjects } from "./projects-check.js";
 import { createAccountStore, type AccountEntry } from "./accounts/store.js";
 import { createRotationRuntime, type RotationStore } from "./runtime.js";
+import { createUsageCache, type UsageResult } from "./usage.js";
 
 export interface ExtensionDependencies {
   createStore?: () => RotationStore;
@@ -11,20 +12,23 @@ export interface ExtensionDependencies {
   env?: NodeJS.ProcessEnv;
   checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
   checkSharedProjects?: typeof checkSharedProjects;
+  getUsage?: (accountName: string, configDir: string | null) => Promise<UsageResult>;
 }
 
 /**
  * Rotates the Claude subscription account used by pi-claude-bridge by switching
  * `process.env.CLAUDE_CONFIG_DIR` between `claude /login` config directories.
  * The Bridge spreads `process.env` into every Claude Code query, so no Bridge
- * patch is needed. Credentials stay owned by Claude Code; this extension never
- * reads or stores them.
+ * patch is needed. Credentials stay owned by Claude Code; usage checks read its
+ * existing OAuth token but never store credentials or initiate login.
  */
 export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies = {}): void {
   let context: ExtensionContext | undefined;
   const store = (deps.createStore ?? createAccountStore)();
+  const usageCache = createUsageCache({ now: deps.now });
   const runtime = createRotationRuntime({
     store,
+    getUsage: deps.getUsage ?? usageCache.get,
     checkSharedProjects: deps.checkSharedProjects ?? checkSharedProjects,
     checkAccount: deps.checkAccount ?? ((account, signal) => checkAccount(account, { env: deps.env, signal })),
     now: deps.now ?? Date.now,
@@ -32,8 +36,12 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     notify: (message, level) => {
       if (context?.hasUI) context.ui.notify(message, level);
     },
-    setStatus: text => {
-      if (context?.hasUI) context.ui.setStatus("claude-accounts", text);
+    setStatus: (text, level) => {
+      if (context?.hasUI) {
+        const styled = text !== undefined && level && typeof context.ui.theme?.fg === "function"
+          ? context.ui.theme.fg(level, text) : text;
+        context.ui.setStatus("claude-accounts", styled);
+      }
     },
   });
   pi.on("session_start", async (_event, ctx) => {
@@ -51,7 +59,12 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     const message = await runtime.onAssistantMessageEnd(event.message);
     if (message) return { message };
   });
-  pi.on("session_shutdown", () => {
+  pi.on("turn_end", (_event, ctx) => {
+    context = ctx;
+    runtime.refreshUsage();
+  });
+  pi.on("session_shutdown", (_event, ctx) => {
+    context = ctx;
     runtime.onSessionShutdown();
   });
   const command = createAccountCommand({ store, runtime, now: deps.now ?? Date.now, checkAccount: runtime.checkAccount });
@@ -60,6 +73,7 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     handler: async (args, ctx) => {
       context = ctx;
       await command.handler(args, ctx);
+      await runtime.refresh().catch(() => { /* Store errors must not break advisory refresh. */ });
     },
   });
 }

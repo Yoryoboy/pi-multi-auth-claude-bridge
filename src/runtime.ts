@@ -8,6 +8,7 @@ import {
 import { nextAfter, selectActive, type Selection } from "./accounts/selector.js";
 import { accountForEnv, applyAccountEnv } from "./env.js";
 import type { AuthStatus } from "./auth-status.js";
+import type { UsageResult, Window } from "./usage.js";
 import { classifyError } from "./failover/classify.js";
 import { computeCooldownUntil } from "./failover/reset.js";
 
@@ -20,7 +21,8 @@ export interface RotationDependencies {
   env?: NodeJS.ProcessEnv;
   now: () => number;
   notify(message: string, level: "info" | "warning" | "error"): void;
-  setStatus(text: string | undefined): void;
+  setStatus(text: string | undefined, level?: "dim" | "warning" | "error"): void;
+  getUsage?: (accountName: string, configDir: string | null) => Promise<UsageResult>;
   checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
   checkSharedProjects?: typeof checkSharedProjects;
 }
@@ -49,6 +51,38 @@ export function createRotationRuntime(deps: RotationDependencies) {
   let captured: { account: AccountEntry; probe: boolean; previousUntil: number | null } | undefined;
   let lastApplied: typeof captured;
   let generation = 0;
+  let usageGeneration = 0;
+  let activeSelection: Extract<Selection, { kind: "account" }> | undefined;
+  let usage: UsageResult | undefined;
+  const clearUsage = () => {
+    usageGeneration++;
+    activeSelection = undefined;
+    usage = undefined;
+  };
+  const renderAccountStatus = () => {
+    if (!activeSelection) return;
+    const name = `claude: ${activeSelection.account.name}${activeSelection.probe ? " (probe)" : ""}`;
+    if (!usage) { deps.setStatus(name); return; }
+    if (!usage.ok) { deps.setStatus(`${name} · limits unavailable`, "warning"); return; }
+    const percent = (window: Window | null) => window === null ? "--" : `${Math.round(window.usedPercent)}%`;
+    const worst = Math.max(usage.fiveHour?.usedPercent ?? 0, usage.weekly?.usedPercent ?? 0);
+    deps.setStatus(`${name} · 5h ${percent(usage.fiveHour)} · wk ${percent(usage.weekly)}`,
+      worst > 90 ? "error" : worst > 75 ? "warning" : "dim");
+  };
+  const refreshUsage = () => {
+    if (unmanaged || !activeSelection || !deps.getUsage) return;
+    const account = activeSelection.account;
+    const mine = ++usageGeneration;
+    // Never await network work in a request or event handler.
+    void (async () => {
+      let result: UsageResult;
+      try { result = await deps.getUsage!(account.name, account.configDir); }
+      catch { result = { ok: false, reason: "unavailable" }; }
+      if (mine !== usageGeneration || !activeSelection) return;
+      usage = result;
+      renderAccountStatus();
+    })().catch(() => { /* Advisory usage must not interfere with rotation. */ });
+  };
   let warnedAuth = false;
   const pending = new Set<AbortController>();
   const stopChecks = () => {
@@ -71,10 +105,18 @@ export function createRotationRuntime(deps: RotationDependencies) {
       deps.setStatus(undefined);
     }
   };
-  const status = (selection: Selection) => {
-    deps.setStatus(selection.kind === "account"
-      ? `claude: ${selection.account.name}${selection.probe ? " (probe)" : ""}`
-      : selection.reason === "all-need-attention" ? "claude: no usable accounts" : undefined);
+  const status = (selection: Selection, refresh = false) => {
+    if (selection.kind !== "account") {
+      clearUsage();
+      deps.setStatus(selection.reason === "all-need-attention" ? "claude: no usable accounts" : undefined);
+      return;
+    }
+    const changed = activeSelection?.account.name !== selection.account.name ||
+      activeSelection?.account.configDir !== selection.account.configDir;
+    if (changed) clearUsage();
+    activeSelection = selection;
+    renderAccountStatus();
+    if (changed || refresh) refreshUsage();
   };
   const apply = (state: StateFile, selection: Extract<Selection, { kind: "account" }>) => {
     applyAccountEnv(selection.account, env);
@@ -83,7 +125,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
       previousUntil: state.state[selection.account.name]?.cooldownUntil ?? null,
     };
   };
-  const select = (state: StateFile, capture: boolean) => {
+  const select = (state: StateFile, capture: boolean, refresh = false) => {
     checkLaunch(state);
     if (unmanaged) return;
     const selection = selectActive(state, deps.now());
@@ -93,7 +135,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
     } else if (capture) {
       captured = undefined;
     }
-    status(selection);
+    status(selection, refresh);
   };
 
   const startCheck = (account: AccountEntry) => {
@@ -168,13 +210,15 @@ export function createRotationRuntime(deps: RotationDependencies) {
     get unmanaged() { return unmanaged; },
     get appliedAccountName() { return lastApplied?.account.name; },
     checkAccount: startCheck,
-    onSessionShutdown() { stopChecks(); },
+    refreshUsage,
+    onSessionShutdown() { stopChecks(); clearUsage(); deps.setStatus(undefined); },
     async refresh(): Promise<void> {
       if (unmanaged) return;
-      select(await deps.store.load(), false);
+      select(await deps.store.load(), false, true);
     },
     async onSessionStart(): Promise<void> {
       stopChecks();
+      clearUsage();
       warnedAuth = false;
       const mine = generation;
       unmanaged = false;
@@ -234,6 +278,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
                 ? [{ name: account.name, until: item.cooldownUntil }] : [];
             });
             const earliest = Math.min(...resets.map(item => item.until));
+            clearUsage();
             deps.setStatus(Number.isFinite(earliest) ? `claude: no accounts · back ${localTime(earliest)}` : "claude: no usable accounts");
             const detail = resets.length > 0
               ? resets.map(item => `${item.name} resets ${localTime(item.until)}`).join(", ")

@@ -104,6 +104,17 @@ describe("usage fetcher", () => {
 });
 
 describe("usage cache", () => {
+  it("keys cached and in-flight usage by name and config directory", async () => {
+    const f = fixture();
+    const cache = createUsageCache(f.deps);
+    const old = cache.get("main", null);
+    const replacement = cache.get("main", "/replacement");
+    expect(replacement).not.toBe(old);
+    await Promise.all([old, replacement]);
+    await cache.get("main", "/third");
+    expect(f.fetch).toHaveBeenCalledTimes(3);
+    expect(f.readFile).toHaveBeenCalledWith("/replacement/.credentials.json", "utf8");
+  });
   it("hits within the default TTL and refetches at expiry", async () => {
     const f = fixture();
     const cache = createUsageCache(f.deps);
