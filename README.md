@@ -53,32 +53,20 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
 
    Never link `.credentials.json`, `.claude.json`, `sessions/`, or `plugins/`.
 
-3. Register the accounts in Pi, in priority order:
+3. Register the accounts in Pi, in priority order: open `/claude-accounts`, choose `Add account`, and add `main` with `default (~/.claude)`, then `work` with the custom path `~/.claude-work`.
 
-   ```
-   /claude-account add main default
-   /claude-account add work ~/.claude-work
-   ```
-
-   `add` only registers the directory; it never starts a login. At session start, every account is checked in the background with `claude auth status`. Logged-out accounts, or accounts whose identity changed, are marked *needs attention*. A separate background check warns once with the offending accounts and symlink fix commands when their `projects/` directories are not shared. It never changes files; use the merge-safe steps above to preserve existing history.
+   `Add account` only registers the directory; it never starts a login. At session start, every account is checked in the background with `claude auth status`. Logged-out accounts, or accounts whose identity changed, are marked *needs attention*. A separate background check warns once with the offending accounts and symlink fix commands when their `projects/` directories are not shared. It never changes files; use the merge-safe steps above to preserve existing history.
 
 ## Menu
 
-`/claude-accounts` (TUI only) opens an arrow-key menu: one row per account with its state and cached limits, plus `Add account`, `Clear preference`, and `Close`. Selecting an account offers `Use`, `Reset`, `Remove` (confirmed), and `Back`. Every action runs through `/claude-account`, so both behave identically.
+`/claude-accounts` (TUI only) opens an arrow-key menu: one row per account with its state and cached limits, plus `Add account`, `Clear preference`, and `Close`. Selecting an account offers `Use`, `Reset`, `Remove` (confirmed), and `Back`.
 
-## Command
-
-```
-/claude-account [list | use <name> | clear | reset <name> | add <name> <dir|default> | remove <name>]
-```
-
-| Subcommand | Effect |
+| Action | Effect |
 | --- | --- |
-| `list` (default) | Accounts in priority order, with identity and state |
-| `use <name>` | Prefer this account. Automatic failover still applies |
-| `clear` | Drop the preference |
-| `reset <name>` | Clear cooldown, needs-attention, and the cached identity, then re-check |
-| `add` / `remove` | Manage the registry |
+| `Use` | Prefer this account. Automatic failover still applies |
+| `Clear preference` | Drop the preference |
+| `Reset` | Clear cooldown, needs-attention, and the cached identity, then re-check |
+| `Add account` / `Remove` | Manage the registry |
 
 The status bar shows `claude: <name> · 5h N% · wk M%`, `claude: <name> · limits unavailable`, `claude: <name> (probe)`, or `claude: no accounts · back HH:MM`. Limits are colored by the higher window: dim up to 75%, warning above 75%, error above 90%.
 

@@ -7,7 +7,7 @@ import {
 import { availability, priorityOrder } from "./accounts/selector.js";
 import type { createRotationRuntime, RotationStore } from "./runtime.js";
 
-const usage = "Usage: /claude-account [list | use <name> | clear | reset <name> | add <name> <dir|default> | remove <name>]";
+const usage = "Usage: list | use <name> | clear | reset <name> | add <name> <dir|default> | remove <name>";
 export interface CommandDependencies {
   store: RotationStore;
   runtime: ReturnType<typeof createRotationRuntime>;
@@ -85,7 +85,7 @@ export function createAccountCommand(deps: CommandDependencies): Omit<Registered
         }
         notify(`Claude account ${subcommand}${name ? `: ${name}` : ""} applied; automatic failover remains enabled.`);
       } catch (error) {
-        notify(`${error instanceof Error ? error.message : "Account operation failed"}\n${usage}`, "error");
+        notify(error instanceof Error ? error.message : "Account operation failed", "error");
       }
     },
   };

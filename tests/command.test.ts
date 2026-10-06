@@ -16,7 +16,7 @@ function harness(env: NodeJS.ProcessEnv = {}) {
   const ctx = { hasUI: true, mode: "tui", ui: { notify } } as any;
   return { command, runtime, store, env, notify, setStatus, check, directoryExists, ctx, get state() { return state; }, replace(s: StateFile) { state = s; } };
 }
-describe("claude-account command", () => {
+describe("account action dispatcher", () => {
   it("lists priority, applied account, cached identity and states by default", async () => {
     const h = harness(); await h.runtime.onSessionStart();
     h.replace(setPreferred(setIdentity(setCooldown(h.state, "work", now + 3600000, "five_hour"), "main", "alice"), "work"));
@@ -87,16 +87,20 @@ describe("claude-account command", () => {
     await h.command.handler("use work", h.ctx); await h.command.handler("remove work", h.ctx);
     expect(h.state.preferred).toBeNull(); expect(h.env.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
-  it.each(["unknown", "use", "clear extra", "reset missing", "remove missing", "add bad", "add main /duplicate", "use work extra", "list extra", "add x relative"])("notifies usage without throwing: %s", async args => {
+  it.each(["unknown", "use", "clear extra", "add bad", "use work extra", "list extra"])("notifies usage without throwing: %s", async args => {
     const h = harness(); await expect(h.command.handler(args, h.ctx)).resolves.toBeUndefined();
     expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("Usage:"), "error");
+  });
+  it.each(["reset missing", "remove missing", "add main /duplicate", "add x relative"])("notifies the failure without usage noise: %s", async args => {
+    const h = harness(); await expect(h.command.handler(args, h.ctx)).resolves.toBeUndefined();
+    expect(h.notify).toHaveBeenLastCalledWith(expect.not.stringContaining("Usage:"), "error");
   });
   it("rejects missing directories and store errors", async () => {
     const h = harness(); h.directoryExists.mockResolvedValue(false);
     await h.command.handler("add extra /missing", h.ctx); expect(h.state.accounts).toHaveLength(2);
     h.store.load.mockRejectedValue(new Error("store unavailable"));
     await expect(h.command.handler("list", h.ctx)).resolves.toBeUndefined();
-    expect(h.notify.mock.calls.at(-1)![0]).toContain("Usage:");
+    expect(h.notify).toHaveBeenLastCalledWith("store unavailable", "error");
   });
   it.each(["use work", "clear", "reset work"])("guards unmanaged %s", async args => {
     const h = harness({ CLAUDE_CONFIG_DIR: "/foreign" }); await h.runtime.onSessionStart();

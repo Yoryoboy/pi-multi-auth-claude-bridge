@@ -101,3 +101,4 @@ Verified premise: endpoint returns `five_hour`/`seven_day` `{utilization, resets
 - [x] **ODD-10 — Status bar limits**: `claude: main · 5h 42% · wk 18%`, theme colors (dim ≤75, warning >75, error >90); refresh on session_start, turn_end, after menu.
 - [x] **ODD-11 — `/claude-accounts` menu** (`ctx.ui.select` loop): account rows with state+limits, Add (input), per-account Use/Reset/Remove(confirm)/Back, Close; keep `/claude-account` text command.
 - [x] **ODD-12 — README** for menu, limits, and the credentials-read scope.
+- [x] **ODD-13 — Drop the `/claude-account` text command** (2026-10-06, user decision): the menu covers every action, so only `/claude-accounts` is registered; `command.ts` stays as the menu's internal dispatcher and errors no longer append the slash-command usage. RED: 5 wiring/error tests; GREEN: 258/258, typecheck pass.

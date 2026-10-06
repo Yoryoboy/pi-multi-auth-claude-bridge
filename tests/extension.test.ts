@@ -30,7 +30,7 @@ describe("Pi extension wiring", () => {
       await command!.handler("", ctx);
       expect(select).not.toHaveBeenCalled();
       expect(h.store.load).not.toHaveBeenCalled();
-      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("/claude-account"), "error");
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith("/claude-accounts requires the interactive TUI.", "error");
     },
   );
   it("dispatches menu actions through the typed handler and refreshes usage after closing", async () => {
@@ -50,15 +50,16 @@ describe("Pi extension wiring", () => {
     expect(h.ctx.ui.setStatus).toHaveBeenCalledWith("claude-accounts", "claude: work");
   });
   it("refreshes usage on start, turn end and commands without blocking context; clears on shutdown", async () => {
-    const h = harness();
+    const h = harness(true, undefined, vi.fn(async (): Promise<UsageResult> => ({ ok: false, reason: "unavailable" })));
     await h.handlers.session_start({}, h.ctx);
     expect(h.getUsage).toHaveBeenCalledTimes(1);
     await h.handlers.context({}, h.ctx);
     expect(h.getUsage).toHaveBeenCalledTimes(1);
     await h.handlers.turn_end({}, h.ctx);
     expect(h.getUsage).toHaveBeenCalledTimes(2);
-    await h.pi.registerCommand.mock.calls[0][1].handler("list", h.ctx);
-    expect(h.getUsage).toHaveBeenCalledTimes(3);
+    const select = vi.fn().mockResolvedValueOnce("Close");
+    await h.pi.registerCommand.mock.calls[0][1].handler("", { ...h.ctx, mode: "tui", ui: { ...h.ctx.ui, select } });
+    expect(h.getUsage.mock.calls.length).toBeGreaterThan(2);
     await h.handlers.session_shutdown({}, h.ctx);
     expect(h.ctx.ui.setStatus).toHaveBeenLastCalledWith("claude-accounts", undefined);
   });
@@ -77,7 +78,7 @@ describe("Pi extension wiring", () => {
   it("registers lifecycle hooks and command without starting auth checks", () => {
     const h = harness();
     expect(Object.keys(h.handlers)).toEqual(["session_start", "context", "message_end", "turn_end", "session_shutdown"]);
-    expect(h.pi.registerCommand).toHaveBeenCalledWith("claude-account", expect.objectContaining({ handler: expect.any(Function), getArgumentCompletions: expect.any(Function) }));
+    expect(h.pi.registerCommand.mock.calls.map(([name]) => name)).toEqual(["claude-accounts"]);
     expect(h.checkAccount).not.toHaveBeenCalled();
     expect(h.pi.registerProvider).not.toHaveBeenCalled();
     expect(h.store.load).not.toHaveBeenCalled();

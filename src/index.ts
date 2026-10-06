@@ -69,20 +69,13 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     context = ctx;
     runtime.onSessionShutdown();
   });
+  // Not registered as a slash command: the menu dispatches every account action through it.
   const command = createAccountCommand({ store, runtime, now: deps.now ?? Date.now, checkAccount: runtime.checkAccount });
-  pi.registerCommand("claude-account", {
-    ...command,
-    handler: async (args, ctx) => {
-      context = ctx;
-      await command.handler(args, ctx);
-      await runtime.refresh().catch(() => { /* Store errors must not break advisory refresh. */ });
-    },
-  });
   pi.registerCommand("claude-accounts", {
     description: "Manage Claude accounts in the interactive TUI",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI || ctx.mode !== "tui") {
-        ctx.ui.notify("/claude-accounts requires the interactive TUI. Use /claude-account instead.", "error");
+        ctx.ui.notify("/claude-accounts requires the interactive TUI.", "error");
         return;
       }
       context = ctx;
