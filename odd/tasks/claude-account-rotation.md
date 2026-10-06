@@ -86,7 +86,7 @@ Implementation authorized 2026-10-03. Branch: `feat/claude-account-rotation`.
 - [x] M1 Load + register: `gentle-shell -e <repo>/src/index.ts`; `/claude-account add main default`, `add work ~/.claude-work`; `list` shows both identities after the background check. Passed 2026-10-05: `main · default · 93jads · active`, `work · ~/.claude-work · 93jadsarg · available`.
 - [x] M2 Mid-session switch: one message on `main`, then `/claude-account use work`, one more message; a new Bridge session appears under `~/.claude-work/projects/` for the cwd. Passed 2026-10-05 after the `projects/` symlink: main→work and work→main switches mid-session, each next message answered with no error; status bar followed the switch.
 - [x] M3 Logged-out account: `add broken <empty dir>`; it becomes `needs attention: logged out` and is never selected. Passed 2026-10-05: `broken` flagged `needs attention: logged out`, never selected; removed afterwards.
-- [ ] M4 Real exhaustion: capture the actual error text and notification when an account hits its limit naturally; confirm failover and Pi retry on the next account.
+- [x] M4 Real exhaustion: capture the actual error text and notification when an account hits its limit naturally; confirm failover and Pi retry on the next account. Passed 2026-10-06: `main` hit its limit naturally and rotation switched to `work` (user-observed). Automatic Pi retry not separately confirmed.
 - [ ] M5 All exhausted: confirm the non-retryable message and status (natural occurrence only).
 
 - [x] **ODD-8 — Shared `projects/` check and README fix** (added after M2 finding)
