@@ -45,14 +45,22 @@ describe("computeCooldownUntil", () => {
 
   it.each(["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"])("self-corrects stale cooldown for %s by 24h", type => {
     const computed = wallTime(18, 30);
-    expect(computeCooldownUntil(quota("18:30", null, type), now, computed)).toBe(computed + day);
     expect(computeCooldownUntil(quota("18:30", null, type), now, computed + hour)).toBe(computed + day);
     expect(computeCooldownUntil(quota("18:30", null, type), now, computed - 1)).toBe(computed);
   });
 
-  it("keeps rolling wall time by whole days until it passes the previous cooldown", () => {
+  it("keeps a cooldown that a probe before its expiry reports again", () => {
+    // Probe at 23:09 while the cooldown ends at 23:10; the limit still says "resets 11:10pm".
+    const probeAt = wallTime(23, 9);
+    const previous = wallTime(23, 10);
+    expect(computeCooldownUntil(quota("11:10pm"), probeAt, previous)).toBe(previous);
+    expect(computeCooldownUntil(quota("18:30"), now, wallTime(18, 30))).toBe(wallTime(18, 30));
+  });
+
+  it("keeps rolling wall time by whole days until it reaches the previous cooldown", () => {
     const computed = wallTime(18, 30);
-    expect(computeCooldownUntil(quota("18:30"), now, computed + 2 * day)).toBe(computed + 3 * day);
+    expect(computeCooldownUntil(quota("18:30"), now, computed + 2 * day)).toBe(computed + 2 * day);
+    expect(computeCooldownUntil(quota("18:30"), now, computed + 2 * day + hour)).toBe(computed + 3 * day);
   });
 
   it("never self-corrects an epoch or fallback cooldown", () => {

@@ -41,8 +41,8 @@ export function computeCooldownUntil(c: Exhausted, now: number, previousUntil: n
   let until = nextWallTime(c.resetText, now);
   // Without reset info, step past any stale cooldown so a rejected probe backs off.
   if (until === null) return Math.min(Math.max(now, previousUntil ?? now) + FALLBACK_COOLDOWN_MS, cap);
-  // A bare wall time cannot name its day; if it does not move past the stale
-  // cooldown, the limit resets on a later day.
-  while (previousUntil !== null && until <= previousUntil && until < cap) until += DAY_MS;
+  // A bare wall time cannot name its day; if it falls before the stale cooldown,
+  // the limit resets on a later day. The same time confirms the cooldown.
+  while (previousUntil !== null && until < previousUntil && until < cap) until += DAY_MS;
   return Math.min(until, cap);
 }
