@@ -259,12 +259,42 @@ describe("rotation runtime", () => {
     await h.runtime.onAssistantMessageEnd(error());
     expect(h.state.state.main.cooldownUntil).toBe(until + 3_600_000);
   });
-  it("marks account problems for attention without switching", async () => {
+  it.each([
+    ["Failed to authenticate", "Failed to authenticate"],
+    ["API Error: 400 billing_error: credit balance too low", "billing_error"],
+  ])("marks account problem %j for attention and switches with a retryable error", async (errorMessage, reason) => {
+    const h = harness();
+    await h.runtime.onSessionStart();
+    await h.runtime.beforeRequest();
+    const message = error(errorMessage);
+    const replacement = await h.runtime.onAssistantMessageEnd(message);
+    expect(h.state.state.main.needsAttention).toBe(reason);
+    expect(h.env.CLAUDE_CONFIG_DIR).toBe("/work");
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: work");
+    expect(h.notify).toHaveBeenCalledWith(`Claude account "main" needs attention: ${reason} — switched to "work"`, "error");
+    expect(replacement).toEqual({ ...message, errorMessage: 'Claude account "main" needs attention — switched to "work", retrying (service unavailable)' });
+    expect(replacement!.errorMessage).not.toMatch(/billing|quota exceeded|auth/i);
+    expect(message.errorMessage).toBe(errorMessage);
+  });
+  it("flags every account that fails with an account problem and stops when none is usable", async () => {
     const h = harness();
     await h.runtime.onSessionStart();
     await h.runtime.beforeRequest();
     await h.runtime.onAssistantMessageEnd(error("Failed to authenticate"));
+    await h.runtime.beforeRequest();
+    expect(await h.runtime.onAssistantMessageEnd(error("Failed to authenticate"))).toBeUndefined();
     expect(h.state.state.main.needsAttention).toBe("Failed to authenticate");
+    expect(h.state.state.work.needsAttention).toBe("Failed to authenticate");
+    expect(h.env.CLAUDE_CONFIG_DIR).toBe("/work");
+    expect(h.notify).toHaveBeenLastCalledWith('Claude account "work" needs attention: Failed to authenticate — rotation stopped for this account', "error");
+  });
+  it("does not switch to a cooling account after an account problem", async () => {
+    const h = harness(setCooldown(accounts(), "work", now + 3_600_000, "rate_limit"));
+    await h.runtime.onSessionStart();
+    await h.runtime.beforeRequest();
+    expect(await h.runtime.onAssistantMessageEnd(error("Failed to authenticate"))).toBeUndefined();
+    expect(h.state.state.main.needsAttention).toBe("Failed to authenticate");
+    expect(h.state.state.work.cooldownUntil).toBe(now + 3_600_000);
     expect(h.env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(h.notify).toHaveBeenCalledWith('Claude account "main" needs attention: Failed to authenticate — rotation stopped for this account', "error");
   });

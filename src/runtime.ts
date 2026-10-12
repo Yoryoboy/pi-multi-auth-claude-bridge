@@ -263,7 +263,15 @@ export function createRotationRuntime(deps: RotationDependencies) {
       const classification = classifyError(message.errorMessage);
       try {
         if (classification.kind === "account-problem") {
-          await deps.store.mutate(state => setNeedsAttention(state, name, classification.reason));
+          const state = await deps.store.mutate(current => setNeedsAttention(current, name, classification.reason));
+          const next = nextAfter(state, name, deps.now());
+          if (next.kind === "account" && !next.probe) {
+            apply(state, next);
+            status(next);
+            deps.notify(`Claude account "${name}" needs attention: ${classification.reason} — switched to "${next.account.name}"`, "error");
+            // Pi does not retry auth or billing errors; the original text must not survive the rewrite.
+            return { ...message, errorMessage: `Claude account "${name}" needs attention — switched to "${next.account.name}", retrying (service unavailable)` };
+          }
           deps.notify(`Claude account "${name}" needs attention: ${classification.reason} — rotation stopped for this account`, "error");
         } else if (classification.kind === "exhausted") {
           const now = deps.now();
