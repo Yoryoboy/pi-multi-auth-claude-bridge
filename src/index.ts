@@ -28,11 +28,12 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
   const store = (deps.createStore ?? createAccountStore)();
   const usageCache = createUsageCache({ now: deps.now });
   const getUsage = deps.getUsage ?? usageCache.get;
+  const checkAuth = deps.checkAccount ?? ((account: AccountEntry, signal?: AbortSignal) => checkAccount(account, { env: deps.env, signal }));
   const runtime = createRotationRuntime({
     store,
     getUsage,
     checkSharedProjects: deps.checkSharedProjects ?? checkSharedProjects,
-    checkAccount: deps.checkAccount ?? ((account, signal) => checkAccount(account, { env: deps.env, signal })),
+    checkAccount: checkAuth,
     now: deps.now ?? Date.now,
     env: deps.env,
     notify: (message, level) => {
@@ -82,6 +83,8 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
       try {
         await runAccountMenu({
           store, ui: ctx.ui, getUsage,
+          checkAuth: (account, signal) => checkAuth(account, signal ?? new AbortController().signal),
+          recheck: account => runtime.checkAccount(account),
           now: deps.now ?? Date.now,
           appliedAccountName: () => runtime.appliedAccountName,
           dispatch: args => command.handler(args, ctx),

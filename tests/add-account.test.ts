@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { createDirectory, runAddAccount } from "../src/add-account.js";
 import { addAccount, normalizeConfigDir, type StateFile } from "../src/accounts/store.js";
 import type { SetupOutcome, SetupPlan } from "../src/shared-setup.js";
+import type { AuthStatus } from "../src/auth-status.js";
+import type { AccountEntry } from "../src/accounts/store.js";
 
 const empty = (): StateFile => ({ version: 1, accounts: [], preferred: null, state: {} });
 
@@ -31,8 +33,11 @@ function harness(choices: (string | undefined)[], inputs: (string | undefined)[]
     apply: vi.fn(async (plan: SetupPlan): Promise<SetupOutcome[]> =>
       plan.steps.map(step => ({ item: step.item, ok: true, shared: true, message: "linked" }))),
   };
-  const deps = { ui, store, dispatch, ensureDirectory, sharedSetup, homeDir: "/home/u" };
-  return { ui, store, dispatch, ensureDirectory, sharedSetup, deps, get state() { return state; } };
+  const checkAuth = vi.fn(async (_account: AccountEntry, _signal?: AbortSignal): Promise<AuthStatus> => ({ kind: "ok", identity: "alice" }));
+  const recheck = vi.fn((_account: AccountEntry) => {});
+  const sleep = vi.fn(async (_ms: number, _signal: AbortSignal) => {});
+  const deps = { ui, store, dispatch, ensureDirectory, sharedSetup, checkAuth, recheck, sleep, homeDir: "/home/u" };
+  return { ui, store, dispatch, ensureDirectory, sharedSetup, checkAuth, recheck, sleep, deps, get state() { return state; } };
 }
 
 describe("add account wizard: name and directory", () => {
@@ -174,6 +179,76 @@ describe("add account wizard: shared setup", () => {
     await runAddAccount(h.deps);
     expect(h.ui.notify).toHaveBeenCalledWith('Could not prepare shared settings for "alt": EACCES', "warning");
     expect(h.sharedSetup.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("add account wizard: wait for login", () => {
+  const WAIT = 'Waiting for "alt" to log in…';
+  const SKIP = "Skip — log in later";
+  // The waiting dialog stays open until the wizard aborts it.
+  const waitingDialog = (h: ReturnType<typeof harness>) => h.ui.select.mockImplementation(async (title, _options, opts) => {
+    if (title !== WAIT) return "~/.claude-alt (suggested)";
+    return new Promise(resolve => opts!.signal!.addEventListener("abort", () => resolve(undefined)));
+  });
+
+  it("confirms an account that is already logged in without waiting", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    await runAddAccount(h.deps);
+    expect(h.checkAuth).toHaveBeenCalledExactlyOnceWith({ name: "alt", configDir: "/home/u/.claude-alt" }, expect.any(AbortSignal));
+    expect(h.ui.select).not.toHaveBeenCalledWith(WAIT, expect.anything(), expect.anything());
+    expect(h.recheck).toHaveBeenCalledExactlyOnceWith({ name: "alt", configDir: "/home/u/.claude-alt" });
+  });
+  it("shows the login command, polls auth status, and closes the dialog when login succeeds", async () => {
+    const h = harness([], ["alt"]);
+    waitingDialog(h);
+    h.checkAuth.mockResolvedValueOnce({ kind: "logged-out" }).mockResolvedValueOnce({ kind: "logged-out" })
+      .mockResolvedValueOnce({ kind: "ok", identity: "alice" });
+    await runAddAccount(h.deps);
+    expect(h.ui.notify).toHaveBeenCalledWith(
+      'Log in "alt": run  env CLAUDE_CONFIG_DIR=/home/u/.claude-alt claude  then /login inside Claude Code.', "info");
+    expect(h.ui.select).toHaveBeenCalledWith(WAIT, [SKIP], { signal: expect.any(AbortSignal) });
+    expect(h.checkAuth).toHaveBeenCalledTimes(3);
+    expect(h.sleep).toHaveBeenCalledWith(3000, expect.any(AbortSignal));
+    expect(h.recheck).toHaveBeenCalledExactlyOnceWith({ name: "alt", configDir: "/home/u/.claude-alt" });
+  });
+  it("keeps polling through transient unavailable results", async () => {
+    const h = harness([], ["alt"]);
+    waitingDialog(h);
+    h.checkAuth.mockResolvedValueOnce({ kind: "logged-out" }).mockResolvedValueOnce({ kind: "unavailable", reason: "auth status timed out" })
+      .mockResolvedValueOnce({ kind: "ok", identity: "alice" });
+    await runAddAccount(h.deps);
+    expect(h.checkAuth).toHaveBeenCalledTimes(3);
+    expect(h.recheck).toHaveBeenCalledOnce();
+  });
+  it("stops polling when the user skips", async () => {
+    const h = harness([], ["alt"]);
+    h.ui.select.mockImplementation(async title => title === WAIT ? SKIP : "~/.claude-alt (suggested)");
+    let pollSignal: AbortSignal | undefined;
+    h.checkAuth.mockImplementation(async (_account, signal) => { pollSignal = signal; return { kind: "logged-out" }; });
+    h.sleep.mockImplementation((_ms, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")))));
+    await runAddAccount(h.deps);
+    expect(pollSignal?.aborted).toBe(true);
+    const calls = h.checkAuth.mock.calls.length;
+    await new Promise(r => setTimeout(r, 0));
+    expect(h.checkAuth).toHaveBeenCalledTimes(calls);
+    expect(h.recheck).not.toHaveBeenCalled();
+  });
+  it("does not wait when auth status cannot run at all", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.checkAuth.mockResolvedValueOnce({ kind: "unavailable", reason: "claude binary not found" });
+    await runAddAccount(h.deps);
+    expect(h.ui.notify).toHaveBeenCalledWith('Could not check login for "alt": claude binary not found', "warning");
+    expect(h.ui.select).toHaveBeenCalledOnce();
+    expect(h.recheck).not.toHaveBeenCalled();
+  });
+  it("uses plain `claude` in the login command for the default directory", async () => {
+    const h = harness([], ["main"], empty());
+    h.ui.select.mockImplementation(async (title, _options, opts) => title === 'Waiting for "main" to log in…'
+      ? new Promise(resolve => opts!.signal!.addEventListener("abort", () => resolve(undefined)))
+      : "default (~/.claude)");
+    h.checkAuth.mockResolvedValueOnce({ kind: "logged-out" });
+    await runAddAccount(h.deps);
+    expect(h.ui.notify).toHaveBeenCalledWith('Log in "main": run  claude  then /login inside Claude Code.', "info");
   });
 });
 

@@ -77,7 +77,8 @@ describe("Claude account menu", () => {
   });
   it("runs the add-account wizard and reloads the menu afterwards", async () => {
     const h = harness(["Add account", "~/.claude-main (suggested)", "Close"], ["main"]);
-    h.deps = { ...h.deps, homeDir: "/home/u", ensureDirectory: vi.fn(async () => true) } as typeof h.deps;
+    h.deps = { ...h.deps, homeDir: "/home/u", ensureDirectory: vi.fn(async () => true),
+      checkAuth: vi.fn(async () => ({ kind: "ok" as const, identity: "alice" })), recheck: vi.fn() } as typeof h.deps;
     await runAccountMenu(h.deps);
     expect(h.ui.input).toHaveBeenCalledWith("Account name", "letters, digits, - or _");
     expect(h.dispatch).toHaveBeenCalledExactlyOnceWith("add main /home/u/.claude-main");

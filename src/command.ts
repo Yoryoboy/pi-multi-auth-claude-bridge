@@ -19,7 +19,7 @@ const time = (until: number) => {
   const date = new Date(until);
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 };
-const shellQuote = (value: string) => /^[\w/.-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+export const shellQuote = (value: string) => /^[\w/.-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 
 export function createAccountCommand(deps: CommandDependencies): Omit<RegisteredCommand, "name" | "sourceInfo"> {
   return {

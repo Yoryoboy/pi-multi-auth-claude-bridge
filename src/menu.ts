@@ -4,13 +4,13 @@ import type { UsageResult } from "./usage.js";
 import { runAddAccount, type AddAccountDependencies } from "./add-account.js";
 
 export interface AccountMenuUI {
-  select(title: string, options: string[]): Promise<string | undefined>;
+  select(title: string, options: string[], opts?: { signal?: AbortSignal }): Promise<string | undefined>;
   input(title: string, placeholder?: string): Promise<string | undefined>;
   confirm(title: string, message: string): Promise<boolean>;
   notify(message: string, level: "info" | "warning" | "error"): void;
 }
 
-export interface AccountMenuDependencies extends Pick<AddAccountDependencies, "ensureDirectory" | "homeDir"> {
+export interface AccountMenuDependencies extends Pick<AddAccountDependencies, "ensureDirectory" | "homeDir" | "checkAuth" | "recheck"> {
   store: Pick<RotationStore, "load">;
   ui: AccountMenuUI;
   dispatch: (args: string) => Promise<void>;

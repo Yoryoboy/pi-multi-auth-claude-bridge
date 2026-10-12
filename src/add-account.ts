@@ -1,7 +1,9 @@
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { isValidAccountName } from "./accounts/store.js";
+import { isValidAccountName, type AccountEntry } from "./accounts/store.js";
+import { checkAccount, type AuthStatus } from "./auth-status.js";
+import { shellQuote } from "./command.js";
 import type { AccountMenuUI } from "./menu.js";
 import type { RotationStore } from "./runtime.js";
 import { projectsReference } from "./projects-check.js";
@@ -15,6 +17,23 @@ export interface AddAccountDependencies {
   ensureDirectory?: (directory: string) => Promise<boolean>;
   homeDir?: string;
   sharedSetup?: { plan: typeof planSharedSetup; apply: typeof applySharedSetup };
+  /** Runs `claude auth status` for the account; never starts a login. */
+  checkAuth?: (account: AccountEntry, signal?: AbortSignal) => Promise<AuthStatus>;
+  /** Re-validates the stored account state after a detected login. */
+  recheck?: (account: AccountEntry) => void;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
+const POLL_MS = 3000;
+const SKIP_LOGIN = "Skip — log in later";
+
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error("aborted"));
+    const timer = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(timer); reject(new Error("aborted")); };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 const DEFAULT_DIR = "default (~/.claude)";
@@ -85,6 +104,47 @@ export async function runAddAccount(deps: AddAccountDependencies): Promise<void>
   const registered = await deps.store.load();
   if (!registered.accounts.some(account => account.name === name)) return;
   if (configDir !== null) await shareWithReference(deps, name, configDir, registered.accounts, homeDir);
+  await waitForLogin(deps, { name, configDir });
+}
+
+/** Polls `claude auth status` while a cancelable dialog is open; resolves the identity once logged in. */
+async function waitForLogin(deps: AddAccountDependencies, account: AccountEntry): Promise<string | undefined> {
+  const check = deps.checkAuth ?? ((entry: AccountEntry, signal?: AbortSignal) => checkAccount(entry, { signal }));
+  const sleep = deps.sleep ?? abortableSleep;
+  const polling = new AbortController();
+  const first = await check(account, polling.signal)
+    .catch((): AuthStatus => ({ kind: "unavailable", reason: "auth status could not start" }));
+  if (first.kind === "unavailable") {
+    deps.ui.notify(`Could not check login for "${account.name}": ${first.reason}`, "warning");
+    return undefined;
+  }
+  let identity = first.kind === "ok" ? first.identity : undefined;
+  if (identity === undefined) {
+    const command = account.configDir === null ? "claude" : `env CLAUDE_CONFIG_DIR=${shellQuote(account.configDir)} claude`;
+    deps.ui.notify(`Log in "${account.name}": run  ${command}  then /login inside Claude Code.`, "info");
+    const dialog = new AbortController();
+    const poll = (async () => {
+      try {
+        while (!polling.signal.aborted) {
+          await sleep(POLL_MS, polling.signal);
+          const result = await check(account, polling.signal)
+            .catch((): AuthStatus => ({ kind: "unavailable", reason: "auth status could not start" }));
+          if (polling.signal.aborted) return;
+          if (result.kind === "ok") {
+            identity = result.identity;
+            dialog.abort();
+            return;
+          }
+        }
+      } catch { /* Aborted by skip: stop polling silently. */ }
+    })();
+    await deps.ui.select(`Waiting for "${account.name}" to log in…`, [SKIP_LOGIN], { signal: dialog.signal });
+    polling.abort();
+    await poll;
+    if (identity === undefined) return undefined;
+  }
+  deps.recheck?.(account);
+  return identity;
 }
 
 /** Offers to link settings.json and projects/ to the reference account; returns undefined when not offered. */
