@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDirectory, runAddAccount } from "../src/add-account.js";
 import { addAccount, normalizeConfigDir, type StateFile } from "../src/accounts/store.js";
+import type { SetupOutcome, SetupPlan } from "../src/shared-setup.js";
 
 const empty = (): StateFile => ({ version: 1, accounts: [], preferred: null, state: {} });
 
@@ -22,8 +23,16 @@ function harness(choices: (string | undefined)[], inputs: (string | undefined)[]
     state = addAccount(state, name, dir === "default" ? null : normalizeConfigDir(dir));
   });
   const ensureDirectory = vi.fn(async (_dir: string) => true);
-  const deps = { ui, store, dispatch, ensureDirectory, homeDir: "/home/u" };
-  return { ui, store, dispatch, ensureDirectory, deps, get state() { return state; } };
+  const sharedSetup = {
+    plan: vi.fn(async (configDir: string, referenceDir: string): Promise<SetupPlan> => ({
+      configDir, referenceDir,
+      steps: [{ item: "projects", kind: "link", target: `${configDir}/projects`, source: `${referenceDir}/projects`, createSource: false }],
+    })),
+    apply: vi.fn(async (plan: SetupPlan): Promise<SetupOutcome[]> =>
+      plan.steps.map(step => ({ item: step.item, ok: true, shared: true, message: "linked" }))),
+  };
+  const deps = { ui, store, dispatch, ensureDirectory, sharedSetup, homeDir: "/home/u" };
+  return { ui, store, dispatch, ensureDirectory, sharedSetup, deps, get state() { return state; } };
 }
 
 describe("add account wizard: name and directory", () => {
@@ -110,6 +119,61 @@ describe("add account wizard: name and directory", () => {
     await runAddAccount(h.deps);
     expect(h.dispatch).toHaveBeenCalledOnce();
     expect(h.ui.confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe("add account wizard: shared setup", () => {
+  it("confirms the exact plan against the default account and applies it", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"], addAccount(empty(), "main", null));
+    await runAddAccount(h.deps);
+    expect(h.sharedSetup.plan).toHaveBeenCalledExactlyOnceWith("/home/u/.claude-alt", "/home/u/.claude");
+    expect(h.ui.confirm).toHaveBeenCalledExactlyOnceWith('Share settings and history with "main"?', [
+      "• projects/: link /home/u/.claude-alt/projects → /home/u/.claude/projects",
+      "Stop Claude Code sessions that use this account first.",
+      ".credentials.json, .claude.json, sessions/ and plugins/ are never touched.",
+    ].join("\n"));
+    expect(h.sharedSetup.apply).toHaveBeenCalledOnce();
+  });
+  it("uses the first registered account as reference when there is no default", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    await runAddAccount(h.deps);
+    expect(h.sharedSetup.plan).toHaveBeenCalledExactlyOnceWith("/home/u/.claude-alt", "/work");
+    expect(h.ui.confirm).toHaveBeenCalledWith('Share settings and history with "work"?', expect.any(String));
+  });
+  it("changes nothing when the user declines and warns that switching may fail", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.ui.confirm.mockResolvedValueOnce(false);
+    await runAddAccount(h.deps);
+    expect(h.sharedSetup.apply).not.toHaveBeenCalled();
+  });
+  it("applies without asking when nothing needs to change", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.sharedSetup.plan.mockImplementationOnce(async (configDir, referenceDir) => ({ configDir, referenceDir, steps: [{ item: "projects", kind: "shared" }] }));
+    await runAddAccount(h.deps);
+    expect(h.ui.confirm).not.toHaveBeenCalled();
+    expect(h.sharedSetup.apply).toHaveBeenCalledOnce();
+  });
+  it("reports failed steps as a warning", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.sharedSetup.apply.mockResolvedValueOnce([{ item: "projects", ok: false, shared: false, message: "EPERM; original restored" }]);
+    await runAddAccount(h.deps);
+    expect(h.ui.notify).toHaveBeenCalledWith('Could not share projects/ for "alt": EPERM; original restored', "warning");
+  });
+  it.each([
+    { label: "the first account", initial: empty(), choice: "~/.claude-alt (suggested)" },
+    { label: "the default directory", initial: addAccount(empty(), "work", "/work"), choice: "default (~/.claude)" },
+  ])("skips shared setup for $label", async ({ initial, choice }) => {
+    const h = harness([choice], ["alt"], initial);
+    await runAddAccount(h.deps);
+    expect(h.sharedSetup.plan).not.toHaveBeenCalled();
+    expect(h.ui.confirm).not.toHaveBeenCalled();
+  });
+  it("reports a planning failure without aborting the wizard", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.sharedSetup.plan.mockRejectedValueOnce(new Error("EACCES"));
+    await runAddAccount(h.deps);
+    expect(h.ui.notify).toHaveBeenCalledWith('Could not prepare shared settings for "alt": EACCES', "warning");
+    expect(h.sharedSetup.apply).not.toHaveBeenCalled();
   });
 });
 

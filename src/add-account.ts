@@ -4,6 +4,8 @@ import { isAbsolute, join } from "node:path";
 import { isValidAccountName } from "./accounts/store.js";
 import type { AccountMenuUI } from "./menu.js";
 import type { RotationStore } from "./runtime.js";
+import { projectsReference } from "./projects-check.js";
+import { applySharedSetup, describeSetupPlan, planSharedSetup, type SetupOutcome } from "./shared-setup.js";
 
 export interface AddAccountDependencies {
   store: Pick<RotationStore, "load">;
@@ -12,6 +14,7 @@ export interface AddAccountDependencies {
   /** Creates the directory and its parents (0700); resolves true when anything was created. */
   ensureDirectory?: (directory: string) => Promise<boolean>;
   homeDir?: string;
+  sharedSetup?: { plan: typeof planSharedSetup; apply: typeof applySharedSetup };
 }
 
 const DEFAULT_DIR = "default (~/.claude)";
@@ -79,6 +82,34 @@ export async function runAddAccount(deps: AddAccountDependencies): Promise<void>
     }
   }
   await deps.dispatch(`add ${name} ${configDir ?? "default"}`);
-  const registered = (await deps.store.load()).accounts.find(account => account.name === name);
-  if (!registered) return;
+  const registered = await deps.store.load();
+  if (!registered.accounts.some(account => account.name === name)) return;
+  if (configDir !== null) await shareWithReference(deps, name, configDir, registered.accounts, homeDir);
+}
+
+/** Offers to link settings.json and projects/ to the reference account; returns undefined when not offered. */
+async function shareWithReference(
+  deps: AddAccountDependencies, name: string, configDir: string,
+  accounts: { name: string; configDir: string | null }[], homeDir: string,
+): Promise<SetupOutcome[] | undefined> {
+  const reference = projectsReference(accounts, homeDir);
+  if (!reference || reference.account.name === name) return undefined;
+  const setup = deps.sharedSetup ?? { plan: planSharedSetup, apply: applySharedSetup };
+  const referenceDir = reference.account.configDir ?? join(homeDir, ".claude");
+  try {
+    const plan = await setup.plan(configDir, referenceDir);
+    const { actionable, text } = describeSetupPlan(plan);
+    if (actionable && !await deps.ui.confirm(`Share settings and history with "${reference.account.name}"?`, text)) {
+      return [];
+    }
+    const outcomes = await setup.apply(plan);
+    for (const outcome of outcomes.filter(outcome => !outcome.ok)) {
+      const label = outcome.item === "projects" ? "projects/" : outcome.item;
+      deps.ui.notify(`Could not share ${label} for "${name}": ${outcome.message}`, "warning");
+    }
+    return outcomes;
+  } catch (error) {
+    deps.ui.notify(`Could not prepare shared settings for "${name}": ${error instanceof Error ? error.message : String(error)}`, "warning");
+    return undefined;
+  }
 }
