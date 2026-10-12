@@ -134,39 +134,34 @@ describe("planSharedSetup / applySharedSetup", () => {
     const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
     const failingSymlink = vi.fn(async () => { throw new Error("EPERM: operation not permitted"); });
     const outcomes = await applySharedSetup(plan, { symlink: failingSymlink });
-    expect(outcomes[1]).toEqual({ item: "projects", ok: false, shared: false, message: "EPERM: operation not permitted; original restored" });
+    expect(outcomes[1]).toEqual({
+      item: "projects", ok: false, shared: false,
+      message: `EPERM: operation not permitted; original restored; files already copied into ${join(d.reference, "projects")} were kept`,
+    });
     expect((await lstat(join(d.target, "projects"))).isDirectory()).toBe(true);
     expect(await readFile(join(d.target, "projects", "keep.jsonl"), "utf8")).toBe("keep");
     await expect(lstat(join(d.target, "projects.bak-20261012-150405", "projects"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes files it merged into the reference when linking fails", async () => {
+  it("never deletes from the reference when linking fails after a merge", async () => {
     const d = await dirs();
     await mkdir(join(d.target, "projects", "p9"), { recursive: true });
     await writeFile(join(d.target, "projects", "p9", "new.jsonl"), "new");
     await mkdir(join(d.target, "projects", "p1"));
     await writeFile(join(d.target, "projects", "p1", "a.jsonl"), "work-a");
     const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
-    await applySharedSetup(plan, { symlink: async () => { throw new Error("EPERM"); } });
-    await expect(lstat(join(d.reference, "projects", "p9"))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readFile(join(d.reference, "projects", "p1", "a.jsonl"), "utf8")).toBe("ref-a");
-    expect(await readFile(join(d.target, "projects", "p9", "new.jsonl"), "utf8")).toBe("new");
-  });
-
-  it("keeps reference files that changed after the merge when undoing", async () => {
-    const d = await dirs();
-    await mkdir(join(d.target, "projects", "p9"), { recursive: true });
-    await writeFile(join(d.target, "projects", "p9", "new.jsonl"), "new");
-    await writeFile(join(d.target, "projects", "p9", "other.jsonl"), "copied");
-    const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
-    // Another writer replaces one merged file before the undo runs.
-    await applySharedSetup(plan, { symlink: async () => {
-      await writeFile(join(d.reference, "projects", "p9", "other.jsonl"), "OTHER_WRITER");
+    const outcomes = await applySharedSetup(plan, { symlink: async () => {
+      await writeFile(join(d.reference, "projects", "p1", "late.jsonl"), "OTHER_WRITER");
       throw new Error("EPERM");
     } });
-    expect(await readFile(join(d.reference, "projects", "p9", "other.jsonl"), "utf8")).toBe("OTHER_WRITER");
-    await expect(lstat(join(d.reference, "projects", "p9", "new.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readFile(join(d.target, "projects", "p9", "other.jsonl"), "utf8")).toBe("copied");
+    expect(outcomes[1]).toEqual({
+      item: "projects", ok: false, shared: false,
+      message: `EPERM; original restored; files already copied into ${join(d.reference, "projects")} were kept`,
+    });
+    expect(await readFile(join(d.reference, "projects", "p9", "new.jsonl"), "utf8")).toBe("new");
+    expect(await readFile(join(d.reference, "projects", "p1", "a.jsonl"), "utf8")).toBe("ref-a");
+    expect(await readFile(join(d.reference, "projects", "p1", "late.jsonl"), "utf8")).toBe("OTHER_WRITER");
+    expect(await readFile(join(d.target, "projects", "p9", "new.jsonl"), "utf8")).toBe("new");
   });
 
   it.each(["projects", "settings.json"] as const)("treats a reference %s that already points into the account as shared", async item => {

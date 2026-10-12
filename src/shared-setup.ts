@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, readFile, readlink, realpath, rename, rmdir, stat as followStat, symlink as nodeSymlink, unlink } from "node:fs/promises";
+import { cp, lstat, mkdir, realpath, rename, rmdir, stat as followStat, symlink as nodeSymlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 /**
@@ -124,45 +124,23 @@ export function describeSetupPlan(plan: SetupPlan): { actionable: boolean; text:
   };
 }
 
-interface MergeResult { conflicts: number; added: { from: string; to: string }[] }
-
-/** Copies entries missing from `source`, recording what it added; existing files are never overwritten. */
-async function mergeInto(backup: string, source: string, result: MergeResult): Promise<void> {
+/**
+ * Copies entries missing from `source`; existing files are never overwritten and nothing is
+ * ever deleted, so a failed setup can leave extra copies but never loses data.
+ * Returns how many existing files were kept untouched (their versions stay only in the backup).
+ */
+async function mergeInto(backup: string, source: string): Promise<number> {
+  let conflicts = 0;
   await cp(backup, source, {
     recursive: true, force: false, errorOnExist: false, preserveTimestamps: true, verbatimSymlinks: true,
-    filter: async (from, to) => {
+    filter: async (_from, to) => {
       const existing = await stat(to);
-      if (!existing) { result.added.push({ from, to }); return true; }
-      if (existing.isDirectory()) return true;
-      result.conflicts++;
+      if (!existing || existing.isDirectory()) return true;
+      conflicts++;
       return false;
     },
   });
-}
-
-/** True only when `to` still is the exact copy of `from` made by the merge (cp preserves timestamps). */
-async function isUnchangedCopy(from: string, to: string): Promise<boolean> {
-  const [a, b] = await Promise.all([stat(from), stat(to)]);
-  if (!a || !b) return false;
-  if (a.isSymbolicLink() && b.isSymbolicLink()) return await readlink(from) === await readlink(to);
-  // utimes keeps millisecond precision only, so allow sub-millisecond drift; contents must still match exactly.
-  if (!a.isFile() || !b.isFile() || a.size !== b.size || Math.abs(a.mtimeMs - b.mtimeMs) >= 1) return false;
-  return (await readFile(from)).equals(await readFile(to));
-}
-
-/**
- * Best-effort undo of a failed merge, deepest first. It removes only files that still are
- * unchanged copies and only empty directories, so data written by anyone else survives.
- */
-async function undoMerge(result: MergeResult): Promise<void> {
-  for (const { from, to } of [...result.added].reverse()) {
-    try {
-      const entry = await stat(to);
-      if (!entry) continue;
-      if (entry.isDirectory()) await rmdir(to);
-      else if (await isUnchangedCopy(from, to)) await unlink(to);
-    } catch { /* Non-empty directory or unreadable entry: keep it. */ }
-  }
+  return conflicts;
 }
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -200,11 +178,11 @@ export async function applySharedSetup(plan: SetupPlan, deps: ApplySetupDependen
       outcomes.push({ item, ok: false, shared: false, message: errorText(error) });
       continue;
     }
-    const merged: MergeResult = { conflicts: 0, added: [] };
+    let merging = false;
     try {
       if (step.createSource) await mkdir(step.source, { recursive: true, mode: 0o700 });
-      if (step.merge) await mergeInto(step.backup, step.source, merged);
-      const conflicts = merged.conflicts;
+      merging = step.merge;
+      const conflicts = step.merge ? await mergeInto(step.backup, step.source) : 0;
       await link(step.source, step.target);
       outcomes.push({
         item, ok: true, shared: true,
@@ -213,7 +191,6 @@ export async function applySharedSetup(plan: SetupPlan, deps: ApplySetupDependen
           : `linked; previous file at ${step.backup}`,
       });
     } catch (error) {
-      await undoMerge(merged);
       let restored = false;
       try {
         if (!await stat(step.target)) {
@@ -224,7 +201,8 @@ export async function applySharedSetup(plan: SetupPlan, deps: ApplySetupDependen
       } catch { /* Reported below; the backup still holds the data. */ }
       outcomes.push({
         item, ok: false, shared: false,
-        message: `${errorText(error)}; ${restored ? "original restored" : `original kept at ${step.backup}`}`,
+        message: `${errorText(error)}; ${restored ? "original restored" : `original kept at ${step.backup}`}${
+          merging ? `; files already copied into ${step.source} were kept` : ""}`,
       });
     }
   }
