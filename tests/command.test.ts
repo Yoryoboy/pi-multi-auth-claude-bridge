@@ -50,18 +50,18 @@ describe("account action dispatcher", () => {
     expect(h.state.state.work.identity).toBeNull();
     expect(h.check).toHaveBeenCalledWith({ name: "work", configDir: "/work" });
   });
-  it("add validates directory, registers only, prints login guidance and checks in background", async () => {
+  it("add validates directory, registers silently (the wizard reports) and checks in background", async () => {
     const h = harness();
     await h.command.handler("add extra /extra", h.ctx);
     expect(h.directoryExists).toHaveBeenCalledWith("/extra");
     expect(h.state.accounts.at(-1)).toEqual({ name: "extra", configDir: "/extra" });
-    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("env CLAUDE_CONFIG_DIR=/extra claude"), "info");
-    expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("/login"), "info");
+    expect(h.notify).not.toHaveBeenCalled();
     expect(h.check).toHaveBeenCalledWith({ name: "extra", configDir: "/extra" });
     await h.command.handler("remove main", h.ctx);
+    h.notify.mockClear();
     await h.command.handler("add personal default", h.ctx);
     expect(h.state.accounts.at(-1)?.configDir).toBeNull();
-    expect(h.notify.mock.calls.at(-1)![0]).toContain("Run claude then /login");
+    expect(h.notify).not.toHaveBeenCalled();
   });
   it("persists mutations with a temp-dir store and validates actual directories", async () => {
     const dir = await mkdtemp(join(tmpdir(), "claude-command-"));

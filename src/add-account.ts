@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isValidAccountName, type AccountEntry } from "./accounts/store.js";
+import { priorityOrder } from "./accounts/selector.js";
 import { checkAccount, type AuthStatus } from "./auth-status.js";
 import { shellQuote } from "./command.js";
 import type { AccountMenuUI } from "./menu.js";
@@ -92,9 +93,10 @@ export async function runAddAccount(deps: AddAccountDependencies): Promise<void>
     return;
   }
 
+  let created = false;
   if (configDir !== null) {
     try {
-      await (deps.ensureDirectory ?? createDirectory)(configDir);
+      created = await (deps.ensureDirectory ?? createDirectory)(configDir);
     } catch (error) {
       deps.ui.notify(`Could not create ${configDir}: ${error instanceof Error ? error.message : String(error)}`, "error");
       return;
@@ -103,12 +105,33 @@ export async function runAddAccount(deps: AddAccountDependencies): Promise<void>
   await deps.dispatch(`add ${name} ${configDir ?? "default"}`);
   const registered = await deps.store.load();
   if (!registered.accounts.some(account => account.name === name)) return;
-  if (configDir !== null) await shareWithReference(deps, name, configDir, registered.accounts, homeDir);
-  await waitForLogin(deps, { name, configDir });
+  const sharing = await shareWithReference(deps, name, configDir, registered.accounts, homeDir);
+  const login = await waitForLogin(deps, { name, configDir });
+
+  const order = priorityOrder(await deps.store.load().catch(() => registered));
+  const position = order.findIndex(account => account.name === name) + 1;
+  const parts = [`Claude account "${name}" added`];
+  if (position > 0) parts.push(`priority ${position} of ${order.length}`);
+  parts.push(login.kind === "ok" ? `logged in as ${login.identity}` : login.kind === "skipped" ? "not logged in yet" : "login not verified");
+  let projectsShared = true;
+  if (sharing === "reference") {
+    parts.push("reference for shared settings.json and projects/");
+  } else {
+    for (const item of ["settings.json", "projects"] as const) {
+      const shared = sharing !== "failed" && sharing.some(outcome => outcome.item === item && outcome.shared);
+      if (item === "projects") projectsShared = shared;
+      parts.push(`${item === "projects" ? "projects/" : item} ${shared ? "shared" : "not shared"}`);
+    }
+  }
+  if (created && configDir !== null) parts.push(`created ${configDir}`);
+  const ok = login.kind === "ok" && projectsShared;
+  deps.ui.notify(`${ok ? "✓ " : ""}${parts.join(" · ")}`, ok ? "info" : "warning");
 }
 
+type LoginResult = { kind: "ok"; identity: string } | { kind: "skipped" } | { kind: "unknown" };
+
 /** Polls `claude auth status` while a cancelable dialog is open; resolves the identity once logged in. */
-async function waitForLogin(deps: AddAccountDependencies, account: AccountEntry): Promise<string | undefined> {
+async function waitForLogin(deps: AddAccountDependencies, account: AccountEntry): Promise<LoginResult> {
   const check = deps.checkAuth ?? ((entry: AccountEntry, signal?: AbortSignal) => checkAccount(entry, { signal }));
   const sleep = deps.sleep ?? abortableSleep;
   const polling = new AbortController();
@@ -116,7 +139,7 @@ async function waitForLogin(deps: AddAccountDependencies, account: AccountEntry)
     .catch((): AuthStatus => ({ kind: "unavailable", reason: "auth status could not start" }));
   if (first.kind === "unavailable") {
     deps.ui.notify(`Could not check login for "${account.name}": ${first.reason}`, "warning");
-    return undefined;
+    return { kind: "unknown" };
   }
   let identity = first.kind === "ok" ? first.identity : undefined;
   if (identity === undefined) {
@@ -141,19 +164,19 @@ async function waitForLogin(deps: AddAccountDependencies, account: AccountEntry)
     await deps.ui.select(`Waiting for "${account.name}" to log in…`, [SKIP_LOGIN], { signal: dialog.signal });
     polling.abort();
     await poll;
-    if (identity === undefined) return undefined;
+    if (identity === undefined) return { kind: "skipped" };
   }
   deps.recheck?.(account);
-  return identity;
+  return { kind: "ok", identity };
 }
 
-/** Offers to link settings.json and projects/ to the reference account; returns undefined when not offered. */
+/** Offers to link settings.json and projects/ to the reference account; `reference` when this account is the source. */
 async function shareWithReference(
-  deps: AddAccountDependencies, name: string, configDir: string,
-  accounts: { name: string; configDir: string | null }[], homeDir: string,
-): Promise<SetupOutcome[] | undefined> {
+  deps: AddAccountDependencies, name: string, configDir: string | null,
+  accounts: AccountEntry[], homeDir: string,
+): Promise<SetupOutcome[] | "reference" | "failed"> {
   const reference = projectsReference(accounts, homeDir);
-  if (!reference || reference.account.name === name) return undefined;
+  if (configDir === null || !reference || reference.account.name === name) return "reference";
   const setup = deps.sharedSetup ?? { plan: planSharedSetup, apply: applySharedSetup };
   const referenceDir = reference.account.configDir ?? join(homeDir, ".claude");
   try {
@@ -170,6 +193,6 @@ async function shareWithReference(
     return outcomes;
   } catch (error) {
     deps.ui.notify(`Could not prepare shared settings for "${name}": ${error instanceof Error ? error.message : String(error)}`, "warning");
-    return undefined;
+    return "failed";
   }
 }

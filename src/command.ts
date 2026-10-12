@@ -67,7 +67,7 @@ export function createAccountCommand(deps: CommandDependencies): Omit<Registered
           const exists = deps.directoryExists ?? (async (dir: string) => (await stat(dir)).isDirectory());
           if (configDir !== null && !await exists(configDir)) throw new Error("Config directory does not exist");
           await deps.store.mutate(state => addAccount(state, name, configDir));
-          notify(`Registered Claude account "${name}". Run ${configDir === null ? "claude" : `env CLAUDE_CONFIG_DIR=${shellQuote(configDir)} claude`} then /login inside Claude Code. Login is never started automatically.`);
+          // The add-account wizard reports login guidance and the final summary.
           deps.checkAccount({ name, configDir });
           return;
         }

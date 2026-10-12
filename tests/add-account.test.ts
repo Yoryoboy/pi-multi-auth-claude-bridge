@@ -252,6 +252,40 @@ describe("add account wizard: wait for login", () => {
   });
 });
 
+describe("add account wizard: summary", () => {
+  const last = (h: ReturnType<typeof harness>) => h.ui.notify.mock.calls.at(-1);
+  it("summarizes identity, sharing, priority and the created directory", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.sharedSetup.plan.mockImplementationOnce(async (configDir, referenceDir) => ({ configDir, referenceDir, steps: [
+      { item: "settings.json", kind: "link", target: "t", source: "s", createSource: false },
+      { item: "projects", kind: "shared" },
+    ] }));
+    await runAddAccount(h.deps);
+    expect(last(h)).toEqual(['✓ Claude account "alt" added · priority 2 of 2 · logged in as alice · settings.json shared · projects/ shared · created /home/u/.claude-alt', "info"]);
+  });
+  it("warns when sharing was declined and login was skipped", async () => {
+    const h = harness([], ["alt"]);
+    h.ui.select.mockImplementation(async title => title.startsWith("Waiting") ? "Skip — log in later" : "~/.claude-alt (suggested)");
+    h.ensureDirectory.mockResolvedValueOnce(false);
+    h.ui.confirm.mockResolvedValueOnce(false);
+    h.checkAuth.mockResolvedValue({ kind: "logged-out" });
+    h.sleep.mockImplementation((_ms, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")))));
+    await runAddAccount(h.deps);
+    expect(last(h)).toEqual(['Claude account "alt" added · priority 2 of 2 · not logged in yet · settings.json not shared · projects/ not shared', "warning"]);
+  });
+  it("marks the reference account as the sharing source", async () => {
+    const h = harness(["default (~/.claude)"], ["main"]);
+    await runAddAccount(h.deps);
+    expect(last(h)).toEqual(['✓ Claude account "main" added · priority 2 of 2 · logged in as alice · reference for shared settings.json and projects/', "info"]);
+  });
+  it("reports login state as unknown when auth status is unavailable", async () => {
+    const h = harness(["default (~/.claude)"], ["main"], empty());
+    h.checkAuth.mockResolvedValueOnce({ kind: "unavailable", reason: "claude binary not found" });
+    await runAddAccount(h.deps);
+    expect(last(h)).toEqual(['Claude account "main" added · priority 1 of 1 · login not verified · reference for shared settings.json and projects/', "warning"]);
+  });
+});
+
 describe("createDirectory", () => {
   it("creates missing parents with mode 0700 and reports whether it created anything", async () => {
     const root = await mkdtemp(join(tmpdir(), "add-account-"));

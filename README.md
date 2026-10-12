@@ -21,41 +21,35 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
 
 ## Setup
 
-1. Log in each extra account in its own config directory:
+Register accounts in priority order from `/claude-accounts` → `Add account`. Start with your main account (`default (~/.claude)`), then add each extra account. The wizard:
 
-   ```sh
-   env CLAUDE_CONFIG_DIR=$HOME/.claude-work claude
-   # inside Claude Code: /login
-   ```
+1. **Name.** Letters, digits, `-` or `_`; names already registered are rejected.
+2. **Directory.** Suggests `~/.claude-<name>`; `default (~/.claude)` is offered while no account uses it; `Custom path…` accepts an absolute path or `~/…` without spaces. A missing directory is created with mode `0700`.
+3. **Shared settings and history.** Every account must share `settings.json` (the Bridge loads hooks from the active config directory) and **`projects/`** (the Bridge resumes sessions by id from the active config directory; separate histories break mid-session switching and automatic failover). The reference is the default account, or the first registered account when there is no default. The wizard shows the exact plan and changes nothing until you confirm:
+   - a missing entry becomes a symlink to the reference;
+   - an existing `settings.json` or `projects/` is moved to `<entry>.bak-YYYYMMDD-HHMMSS` (a unique name, never overwritten); files from a moved `projects/` are copied into the reference **without overwriting** existing files (conflicts stay only in the backup); then the symlink is created. If linking fails, the original `projects/` is restored;
+   - an entry that is already a symlink to the reference is left alone; a symlink pointing elsewhere is left unchanged and reported.
 
-2. Keep hooks and settings identical across accounts. The Bridge loads `settings.json` (hooks included) from the active config directory:
+   Stop Claude Code sessions that use the account first. `.credentials.json`, `.claude.json`, `sessions/` and `plugins/` are never touched.
+4. **Login.** The extension never starts a login. If the account is not logged in yet, the wizard shows the command to run in another terminal (for example `env CLAUDE_CONFIG_DIR=~/.claude-work claude`, then `/login` inside Claude Code) and waits, checking `claude auth status` every 3 seconds. Choose `Skip — log in later` to close the wait.
+5. **Summary.** One notification lists the account's priority, identity, and whether `settings.json` and `projects/` are shared, for example `✓ Claude account "work" added · priority 2 of 2 · logged in as alice · settings.json shared · projects/ shared · created /home/you/.claude-work`.
 
-   ```sh
-   mv ~/.claude-work/settings.json ~/.claude-work/settings.json.bak
-   ln -s ~/.claude/settings.json ~/.claude-work/settings.json
-   ```
+At session start, every account is checked in the background with `claude auth status`. Logged-out accounts are marked *needs attention*; the flag clears by itself once a later check finds the account logged in. An identity change stays flagged until you `Reset` the account. A separate background check warns once with fix commands when an account's `projects/` directory is not shared; that check never changes files.
 
-   **`projects/` MUST be symlinked to the default account's `~/.claude/projects/`.** The Bridge resumes sessions by id, and the session files live under the active config directory; separate histories break mid-session switching and automatic failover.
+### Manual setup
 
-   With Claude Code and Pi stopped, back up any existing history and merge only non-conflicting files before linking (GNU `cp`; keep the backup for conflicts):
+To prepare a directory by hand instead (GNU `cp`; keep the backup for conflicts):
 
-   ```sh
-   mkdir -p "$HOME/.claude/projects"
-   # If projects already exists, first move it aside and merge:
-   mv "$HOME/.claude-work/projects" "$HOME/.claude-work/projects.bak" &&
-     cp -a --update=none "$HOME/.claude-work/projects.bak/." "$HOME/.claude/projects/" &&
-     ln -s "$HOME/.claude/projects" "$HOME/.claude-work/projects"
-   # If projects does not exist, only run:
-   # ln -s "$HOME/.claude/projects" "$HOME/.claude-work/projects"
-   ```
+```sh
+mkdir -p "$HOME/.claude/projects"
+ln -s ~/.claude/settings.json ~/.claude-work/settings.json   # after moving any existing file aside
+# If ~/.claude-work/projects already exists, move it aside and merge first:
+mv "$HOME/.claude-work/projects" "$HOME/.claude-work/projects.bak" &&
+  cp -a --update=none "$HOME/.claude-work/projects.bak/." "$HOME/.claude/projects/" &&
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-work/projects"
+```
 
-   Use a fresh backup name if `projects.bak` already exists; do not rerun this on an already shared symlink. Without a registered default account, share the first registered account's projects directory instead.
-
-   Never link `.credentials.json`, `.claude.json`, `sessions/`, or `plugins/`.
-
-3. Register the accounts in Pi, in priority order: open `/claude-accounts`, choose `Add account`, and add `main` with `default (~/.claude)`, then `work` with the custom path `~/.claude-work`.
-
-   `Add account` only registers the directory; it never starts a login. At session start, every account is checked in the background with `claude auth status`. Logged-out accounts, or accounts whose identity changed, are marked *needs attention*. A separate background check warns once with the offending accounts and symlink fix commands when their `projects/` directories are not shared. It never changes files; use the merge-safe steps above to preserve existing history.
+Never link `.credentials.json`, `.claude.json`, `sessions/`, or `plugins/`.
 
 ## Menu
 
@@ -66,7 +60,8 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
 | `Use` | Prefer this account. Automatic failover still applies |
 | `Clear preference` | Drop the preference |
 | `Reset` | Clear cooldown, needs-attention, and the cached identity, then re-check |
-| `Add account` / `Remove` | Manage the registry |
+| `Add account` | Guided setup: name, directory, shared settings and history, login wait, summary |
+| `Remove` | Remove the account from the registry (its directory is kept) |
 
 The status bar shows `claude: <name> · 5h N% · wk M%`, `claude: <name> · limits unavailable`, `claude: <name> (probe)`, or `claude: no accounts · back HH:MM`. Limits are colored by the higher window: dim up to 75%, warning above 75%, error above 90%.
 
