@@ -153,6 +153,22 @@ describe("planSharedSetup / applySharedSetup", () => {
     expect(await readFile(join(d.target, "projects", "p9", "new.jsonl"), "utf8")).toBe("new");
   });
 
+  it("keeps reference files that changed after the merge when undoing", async () => {
+    const d = await dirs();
+    await mkdir(join(d.target, "projects", "p9"), { recursive: true });
+    await writeFile(join(d.target, "projects", "p9", "new.jsonl"), "new");
+    await writeFile(join(d.target, "projects", "p9", "other.jsonl"), "copied");
+    const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
+    // Another writer replaces one merged file before the undo runs.
+    await applySharedSetup(plan, { symlink: async () => {
+      await writeFile(join(d.reference, "projects", "p9", "other.jsonl"), "OTHER_WRITER");
+      throw new Error("EPERM");
+    } });
+    expect(await readFile(join(d.reference, "projects", "p9", "other.jsonl"), "utf8")).toBe("OTHER_WRITER");
+    await expect(lstat(join(d.reference, "projects", "p9", "new.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(d.target, "projects", "p9", "other.jsonl"), "utf8")).toBe("copied");
+  });
+
   it.each(["projects", "settings.json"] as const)("treats a reference %s that already points into the account as shared", async item => {
     const d = await dirs();
     const real = join(d.target, item);
