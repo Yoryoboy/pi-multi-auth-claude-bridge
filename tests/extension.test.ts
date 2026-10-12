@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import extension from "../src/index.js";
 import type { UsageResult } from "../src/usage.js";
 import type { AuthStatus } from "../src/auth-status.js";
-import { addAccount, removeAccount, setIdentity, type AccountEntry, type StateFile, type StoreMutation } from "../src/accounts/store.js";
+import { addAccount, removeAccount, setIdentity, setNeedsAttention, type AccountEntry, type StateFile, type StoreMutation } from "../src/accounts/store.js";
 
 function harness(hasUI = true, checkAccount: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus> = vi.fn(async () => ({ kind: "unavailable" as const, reason: "not installed" })), getUsage = vi.fn((_name: string, _dir: string | null) => new Promise<UsageResult>(() => {}))) {
   const handlers: Record<string, (...args: any[]) => any> = {};
@@ -143,6 +143,21 @@ describe("Pi extension wiring", () => {
     const h = harness(true, vi.fn(async () => ({ kind: "logged-out" as const })));
     await h.handlers.session_start({}, h.ctx);
     await vi.waitFor(() => expect(h.state.state.work.needsAttention).toBe("logged out"));
+  });
+  it("clears a logged-out flag and records identity once the account logs in", async () => {
+    const h = harness(true, vi.fn(async () => ({ kind: "ok" as const, identity: "alice" })));
+    h.replace(setNeedsAttention(h.state, "work", "logged out"));
+    await h.handlers.session_start({}, h.ctx);
+    await vi.waitFor(() => expect(h.state.state.work.identity).toBe("alice"));
+    expect(h.state.state.work.needsAttention).toBeNull();
+    expect(h.ctx.ui.setStatus).toHaveBeenLastCalledWith("claude-accounts", expect.stringContaining("claude: work"));
+  });
+  it.each(["identity changed: bob -> alice", "billing"])("keeps non-login flag %j after a successful check", async reason => {
+    const h = harness(true, vi.fn(async () => ({ kind: "ok" as const, identity: "alice" })));
+    h.replace(setNeedsAttention(h.state, "work", reason));
+    await h.handlers.session_start({}, h.ctx);
+    await vi.waitFor(() => expect(h.state.state.work.identity).toBe("alice"));
+    expect(h.state.state.work.needsAttention).toBe(reason);
   });
   it("notifies unavailable once total with no state changes", async () => {
     const h = harness(); h.replace(addAccount(h.state, "main", null));

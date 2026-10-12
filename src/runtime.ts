@@ -159,6 +159,10 @@ export function createRotationRuntime(deps: RotationDependencies) {
         const state = await deps.store.mutate(current => {
           if (!live() || !current.accounts.some(a => a.name === account.name && a.configDir === account.configDir)) return current;
           if (result.kind === "logged-out") return setNeedsAttention(current, account.name, "logged out");
+          // A completed login heals only its own flag; other attention reasons still need a manual reset.
+          if (current.state[account.name]?.needsAttention === "logged out") {
+            current = setNeedsAttention(current, account.name, null);
+          }
           const identity = current.state[account.name]?.identity;
           if (identity == null) return setIdentity(current, account.name, result.identity);
           if (identity !== result.identity) {
