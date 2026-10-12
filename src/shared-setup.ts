@@ -1,10 +1,11 @@
-import { cp, lstat, mkdir, realpath, rename, stat as followStat, symlink as nodeSymlink } from "node:fs/promises";
-import { join } from "node:path";
+import { cp, lstat, mkdir, realpath, rename, rmdir, stat as followStat, symlink as nodeSymlink, unlink } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 
 /**
  * Shares `settings.json` and `projects/` of a new account with the reference account.
  * Only these two entries are ever touched; credentials, `.claude.json`, `sessions/`
- * and `plugins/` stay per-account. Existing data is moved to a unique backup, never deleted.
+ * and `plugins/` stay per-account. Existing data is moved into a fresh backup directory
+ * (`<entry>.bak-<stamp>/<entry>`), never deleted.
  */
 export type SharedItem = "settings.json" | "projects";
 export type SetupStep =
@@ -46,13 +47,16 @@ async function sameTarget(a: string, b: string): Promise<boolean> {
   }
 }
 
-async function uniqueBackup(target: string, now: number): Promise<string> {
+/** Backup path inside a container directory that does not exist yet; apply creates it exclusively. */
+async function uniqueBackup(target: string, item: SharedItem, now: number): Promise<string> {
   const base = `${target}.bak-${timestamp(now)}`;
   for (let n = 1; ; n++) {
     const candidate = n === 1 ? base : `${base}-${n}`;
-    if (!await stat(candidate)) return candidate;
+    if (!await stat(candidate)) return join(candidate, item);
   }
 }
+
+const realOrUndefined = (path: string) => realpath(path).catch(() => undefined);
 
 export async function planSharedSetup(
   configDir: string, referenceDir: string, deps: { now?: () => number } = {},
@@ -74,6 +78,17 @@ export async function planSharedSetup(
     }
     const createSource = !sourceStat;
     const targetStat = await stat(target);
+    // A reference that already resolves to (or into) this account must not be linked back: that makes a cycle.
+    const sourceReal = sourceStat ? await realOrUndefined(source) : undefined;
+    const targetReal = targetStat ? await realOrUndefined(target) : undefined;
+    if (sourceReal && targetReal && sourceReal === targetReal) {
+      plan.steps.push({ item, kind: "shared" });
+      continue;
+    }
+    if (sourceReal && targetReal && sourceReal.startsWith(targetReal + sep)) {
+      plan.steps.push({ item, kind: "skip", reason: "the reference entry points inside this account; left unchanged" });
+      continue;
+    }
     if (!targetStat) {
       plan.steps.push({ item, kind: "link", target, source, createSource });
     } else if (targetStat.isSymbolicLink()) {
@@ -81,7 +96,7 @@ export async function planSharedSetup(
         ? { item, kind: "shared" }
         : { item, kind: "skip", reason: "symlink to another location; left unchanged" });
     } else if (directory ? targetStat.isDirectory() : targetStat.isFile()) {
-      plan.steps.push({ item, kind: "replace", target, source, backup: await uniqueBackup(target, now), merge: directory, createSource });
+      plan.steps.push({ item, kind: "replace", target, source, backup: await uniqueBackup(target, item, now), merge: directory, createSource });
     } else {
       plan.steps.push({ item, kind: "skip", reason: "unexpected file type; left unchanged" });
     }
@@ -109,21 +124,29 @@ export function describeSetupPlan(plan: SetupPlan): { actionable: boolean; text:
   };
 }
 
-/** Copies files missing from `source`; returns how many existing files were kept untouched. */
-async function mergeInto(backup: string, source: string): Promise<number> {
-  let conflicts = 0;
+interface MergeResult { conflicts: number; added: string[] }
+
+/** Copies entries missing from `source`, recording what it added; existing files are never overwritten. */
+async function mergeInto(backup: string, source: string, result: MergeResult): Promise<void> {
   await cp(backup, source, {
-    recursive: true, force: false, errorOnExist: false, preserveTimestamps: true,
+    recursive: true, force: false, errorOnExist: false, preserveTimestamps: true, verbatimSymlinks: true,
     filter: async (_from, to) => {
       const existing = await stat(to);
-      if (existing && !existing.isDirectory()) {
-        conflicts++;
-        return false;
-      }
-      return true;
+      if (!existing) { result.added.push(to); return true; }
+      if (existing.isDirectory()) return true;
+      result.conflicts++;
+      return false;
     },
   });
-  return conflicts;
+}
+
+/** Best-effort undo of a failed merge: removes only entries this merge added, deepest first. */
+async function undoMerge(result: MergeResult): Promise<void> {
+  for (const path of [...result.added].reverse()) {
+    const entry = await stat(path).catch(() => undefined);
+    if (!entry) continue;
+    await (entry.isDirectory() ? rmdir(path) : unlink(path)).catch(() => {});
+  }
 }
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -145,20 +168,27 @@ export async function applySharedSetup(plan: SetupPlan, deps: ApplySetupDependen
       }
       continue;
     }
-    // rename() would silently replace an existing backup, so re-check right before moving.
-    if (await stat(step.backup).catch(() => true)) {
-      outcomes.push({ item, ok: false, shared: false, message: `backup path ${step.backup} already exists; left unchanged` });
+    // rename() silently replaces files, so move into a directory this call created exclusively.
+    const container = dirname(step.backup);
+    try {
+      await mkdir(container, { mode: 0o700 });
+    } catch (error) {
+      const exists = (error as NodeJS.ErrnoException).code === "EEXIST";
+      outcomes.push({ item, ok: false, shared: false, message: exists ? `backup path ${container} already exists; left unchanged` : errorText(error) });
       continue;
     }
     try {
       await rename(step.target, step.backup);
     } catch (error) {
+      await rmdir(container).catch(() => {});
       outcomes.push({ item, ok: false, shared: false, message: errorText(error) });
       continue;
     }
+    const merged: MergeResult = { conflicts: 0, added: [] };
     try {
       if (step.createSource) await mkdir(step.source, { recursive: true, mode: 0o700 });
-      const conflicts = step.merge ? await mergeInto(step.backup, step.source) : 0;
+      if (step.merge) await mergeInto(step.backup, step.source, merged);
+      const conflicts = merged.conflicts;
       await link(step.source, step.target);
       outcomes.push({
         item, ok: true, shared: true,
@@ -167,10 +197,14 @@ export async function applySharedSetup(plan: SetupPlan, deps: ApplySetupDependen
           : `linked; previous file at ${step.backup}`,
       });
     } catch (error) {
-      // Files already merged into the reference were only added, never overwritten.
+      await undoMerge(merged);
       let restored = false;
       try {
-        if (!await stat(step.target)) { await rename(step.backup, step.target); restored = true; }
+        if (!await stat(step.target)) {
+          await rename(step.backup, step.target);
+          restored = true;
+          await rmdir(container).catch(() => {});
+        }
       } catch { /* Reported below; the backup still holds the data. */ }
       outcomes.push({
         item, ok: false, shared: false,

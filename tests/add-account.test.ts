@@ -75,10 +75,10 @@ describe("add account wizard: name and directory", () => {
     expect(h.ui.select).toHaveBeenCalledExactlyOnceWith("Config dir", ["~/.claude-extra (suggested)", "Custom path…"]);
     expect(h.dispatch).not.toHaveBeenCalled();
   });
-  it("registers the default directory without creating anything", async () => {
+  it("registers the default directory, creating ~/.claude when missing", async () => {
     const h = harness(["default (~/.claude)"], ["main"]);
     await runAddAccount(h.deps);
-    expect(h.ensureDirectory).not.toHaveBeenCalled();
+    expect(h.ensureDirectory).toHaveBeenCalledExactlyOnceWith("/home/u/.claude");
     expect(h.dispatch).toHaveBeenNthCalledWith(1, "add main default");
   });
   it("expands ~ in a custom path and creates it", async () => {
@@ -275,11 +275,24 @@ describe("add account wizard: summary", () => {
   });
   it("marks the reference account as the sharing source", async () => {
     const h = harness(["default (~/.claude)"], ["main"]);
+    h.ensureDirectory.mockResolvedValueOnce(false);
     await runAddAccount(h.deps);
     expect(last(h)).toEqual(['✓ Claude account "main" added · priority 2 of 2 · logged in as alice · reference for shared settings.json and projects/', "info"]);
   });
+  it("keeps already-shared entries in the summary when the user declines the rest", async () => {
+    const h = harness(["~/.claude-alt (suggested)"], ["alt"]);
+    h.sharedSetup.plan.mockImplementationOnce(async (configDir, referenceDir) => ({ configDir, referenceDir, steps: [
+      { item: "settings.json", kind: "link", target: "t", source: "s", createSource: false },
+      { item: "projects", kind: "shared" },
+    ] }));
+    h.ui.confirm.mockResolvedValueOnce(false);
+    await runAddAccount(h.deps);
+    expect(h.sharedSetup.apply).not.toHaveBeenCalled();
+    expect(last(h)![0]).toContain("settings.json not shared · projects/ shared");
+  });
   it("reports login state as unknown when auth status is unavailable", async () => {
     const h = harness(["default (~/.claude)"], ["main"], empty());
+    h.ensureDirectory.mockResolvedValueOnce(false);
     h.checkAuth.mockResolvedValueOnce({ kind: "unavailable", reason: "claude binary not found" });
     await runAddAccount(h.deps);
     expect(last(h)).toEqual(['Claude account "main" added · priority 1 of 1 · login not verified · reference for shared settings.json and projects/', "warning"]);

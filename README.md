@@ -24,11 +24,11 @@ The main account uses `default`: the extension deletes `CLAUDE_CONFIG_DIR` inste
 Register accounts in priority order from `/claude-accounts` → `Add account`. Start with your main account (`default (~/.claude)`), then add each extra account. The wizard:
 
 1. **Name.** Letters, digits, `-` or `_`; names already registered are rejected.
-2. **Directory.** Suggests `~/.claude-<name>`; `default (~/.claude)` is offered while no account uses it; `Custom path…` accepts an absolute path or `~/…` without spaces. A missing directory is created with mode `0700`.
+2. **Directory.** Suggests `~/.claude-<name>`; `default (~/.claude)` is offered while no account uses it; `Custom path…` accepts an absolute path or `~/…` without spaces. A missing directory (including `~/.claude`) is created with mode `0700`.
 3. **Shared settings and history.** Every account must share `settings.json` (the Bridge loads hooks from the active config directory) and **`projects/`** (the Bridge resumes sessions by id from the active config directory; separate histories break mid-session switching and automatic failover). The reference is the default account, or the first registered account when there is no default. The wizard shows the exact plan and changes nothing until you confirm:
    - a missing entry becomes a symlink to the reference;
-   - an existing `settings.json` or `projects/` is moved to `<entry>.bak-YYYYMMDD-HHMMSS` (a unique name, never overwritten); files from a moved `projects/` are copied into the reference **without overwriting** existing files (conflicts stay only in the backup); then the symlink is created. If linking fails, the original `projects/` is restored;
-   - an entry that is already a symlink to the reference is left alone; a symlink pointing elsewhere is left unchanged and reported.
+   - an existing `settings.json` or `projects/` is moved into a new backup directory `<entry>.bak-YYYYMMDD-HHMMSS/` (created exclusively, so nothing is ever overwritten); files from a moved `projects/` are copied into the reference **without overwriting** existing files (conflicts stay only in the backup); then the symlink is created. If linking fails, the files copied into the reference are removed again and the original entry is restored;
+   - an entry that already resolves to the same place as the reference (in either direction) is left alone; a symlink pointing elsewhere is left unchanged and reported.
 
    Stop Claude Code sessions that use the account first. `.credentials.json`, `.claude.json`, `sessions/` and `plugins/` are never touched.
 4. **Login.** The extension never starts a login. If the account is not logged in yet, the wizard shows the command to run in another terminal (for example `env CLAUDE_CONFIG_DIR=~/.claude-work claude`, then `/login` inside Claude Code) and waits, checking `claude auth status` every 3 seconds. Choose `Skip — log in later` to close the wait.

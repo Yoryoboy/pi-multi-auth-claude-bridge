@@ -93,14 +93,13 @@ export async function runAddAccount(deps: AddAccountDependencies): Promise<void>
     return;
   }
 
+  const directory = configDir ?? join(homeDir, ".claude");
   let created = false;
-  if (configDir !== null) {
-    try {
-      created = await (deps.ensureDirectory ?? createDirectory)(configDir);
-    } catch (error) {
-      deps.ui.notify(`Could not create ${configDir}: ${error instanceof Error ? error.message : String(error)}`, "error");
-      return;
-    }
+  try {
+    created = await (deps.ensureDirectory ?? createDirectory)(directory);
+  } catch (error) {
+    deps.ui.notify(`Could not create ${directory}: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return;
   }
   await deps.dispatch(`add ${name} ${configDir ?? "default"}`);
   const registered = await deps.store.load();
@@ -123,7 +122,7 @@ export async function runAddAccount(deps: AddAccountDependencies): Promise<void>
       parts.push(`${item === "projects" ? "projects/" : item} ${shared ? "shared" : "not shared"}`);
     }
   }
-  if (created && configDir !== null) parts.push(`created ${configDir}`);
+  if (created) parts.push(`created ${directory}`);
   const ok = login.kind === "ok" && projectsShared;
   deps.ui.notify(`${ok ? "✓ " : ""}${parts.join(" · ")}`, ok ? "info" : "warning");
 }
@@ -183,7 +182,10 @@ async function shareWithReference(
     const plan = await setup.plan(configDir, referenceDir);
     const { actionable, text } = describeSetupPlan(plan);
     if (actionable && !await deps.ui.confirm(`Share settings and history with "${reference.account.name}"?`, text)) {
-      return [];
+      // Declining changes nothing, so entries that were already shared stay shared.
+      return plan.steps.map(step => ({
+        item: step.item, ok: true, shared: step.kind === "shared", message: step.kind === "shared" ? "already shared" : "declined",
+      }));
     }
     const outcomes = await setup.apply(plan);
     for (const outcome of outcomes.filter(outcome => !outcome.ok)) {

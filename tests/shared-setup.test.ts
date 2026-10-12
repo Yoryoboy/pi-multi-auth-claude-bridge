@@ -64,7 +64,7 @@ describe("planSharedSetup / applySharedSetup", () => {
     await writeFile(join(d.target, "projects", "p1", "b.jsonl"), "work-b");
     await writeFile(join(d.target, "projects", "p2", "c.jsonl"), "work-c");
     const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
-    const backup = join(d.target, "projects.bak-20261012-150405");
+    const backup = join(d.target, "projects.bak-20261012-150405", "projects");
     expect(plan.steps[1]).toMatchObject({ item: "projects", kind: "replace", backup, merge: true });
     const outcomes = await applySharedSetup(plan);
     expect(outcomes[1]).toEqual({
@@ -82,7 +82,7 @@ describe("planSharedSetup / applySharedSetup", () => {
     const d = await dirs();
     await writeFile(join(d.target, "settings.json"), '{"work":true}');
     const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
-    const backup = join(d.target, "settings.json.bak-20261012-150405");
+    const backup = join(d.target, "settings.json.bak-20261012-150405", "settings.json");
     expect(plan.steps[0]).toMatchObject({ item: "settings.json", kind: "replace", backup, merge: false });
     const outcomes = await applySharedSetup(plan);
     expect(outcomes[0]).toEqual({ item: "settings.json", ok: true, shared: true, message: `linked; previous file at ${backup}` });
@@ -96,7 +96,7 @@ describe("planSharedSetup / applySharedSetup", () => {
     await writeFile(join(d.target, "settings.json"), "x");
     await writeFile(join(d.target, "settings.json.bak-20261012-150405"), "old");
     const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
-    expect(plan.steps[0]).toMatchObject({ backup: join(d.target, "settings.json.bak-20261012-150405-2") });
+    expect(plan.steps[0]).toMatchObject({ backup: join(d.target, "settings.json.bak-20261012-150405-2", "settings.json") });
     await applySharedSetup(plan);
     expect(await readFile(join(d.target, "settings.json.bak-20261012-150405"), "utf8")).toBe("old");
   });
@@ -105,11 +105,12 @@ describe("planSharedSetup / applySharedSetup", () => {
     const d = await dirs();
     await writeFile(join(d.target, "settings.json"), "x");
     const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
-    await writeFile(join(d.target, "settings.json.bak-20261012-150405"), "late");
+    await mkdir(join(d.target, "settings.json.bak-20261012-150405"));
+    await writeFile(join(d.target, "settings.json.bak-20261012-150405", "settings.json"), "late");
     const outcomes = await applySharedSetup(plan);
     expect(outcomes[0]).toMatchObject({ item: "settings.json", ok: false, shared: false });
     expect(await readFile(join(d.target, "settings.json"), "utf8")).toBe("x");
-    expect(await readFile(join(d.target, "settings.json.bak-20261012-150405"), "utf8")).toBe("late");
+    expect(await readFile(join(d.target, "settings.json.bak-20261012-150405", "settings.json"), "utf8")).toBe("late");
   });
 
   it("creates a missing reference projects dir before linking", async () => {
@@ -136,7 +137,35 @@ describe("planSharedSetup / applySharedSetup", () => {
     expect(outcomes[1]).toEqual({ item: "projects", ok: false, shared: false, message: "EPERM: operation not permitted; original restored" });
     expect((await lstat(join(d.target, "projects"))).isDirectory()).toBe(true);
     expect(await readFile(join(d.target, "projects", "keep.jsonl"), "utf8")).toBe("keep");
-    await expect(lstat(join(d.target, "projects.bak-20261012-150405"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(join(d.target, "projects.bak-20261012-150405", "projects"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes files it merged into the reference when linking fails", async () => {
+    const d = await dirs();
+    await mkdir(join(d.target, "projects", "p9"), { recursive: true });
+    await writeFile(join(d.target, "projects", "p9", "new.jsonl"), "new");
+    await mkdir(join(d.target, "projects", "p1"));
+    await writeFile(join(d.target, "projects", "p1", "a.jsonl"), "work-a");
+    const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
+    await applySharedSetup(plan, { symlink: async () => { throw new Error("EPERM"); } });
+    await expect(lstat(join(d.reference, "projects", "p9"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(d.reference, "projects", "p1", "a.jsonl"), "utf8")).toBe("ref-a");
+    expect(await readFile(join(d.target, "projects", "p9", "new.jsonl"), "utf8")).toBe("new");
+  });
+
+  it.each(["projects", "settings.json"] as const)("treats a reference %s that already points into the account as shared", async item => {
+    const d = await dirs();
+    const real = join(d.target, item);
+    if (item === "projects") { await mkdir(join(real, "p5"), { recursive: true }); await writeFile(join(real, "p5", "x.jsonl"), "x"); }
+    else await writeFile(real, '{"work":true}');
+    const { rm } = await import("node:fs/promises");
+    await rm(join(d.reference, item), { recursive: true });
+    await symlink(real, join(d.reference, item));
+    const plan = await planSharedSetup(d.target, d.reference, { now: () => stamp });
+    expect(plan.steps.find(step => step.item === item)).toEqual({ item, kind: "shared" });
+    await applySharedSetup(plan);
+    expect((await lstat(real)).isSymbolicLink()).toBe(false);
+    expect(await realpath(join(d.reference, item))).toBe(await realpath(real));
   });
 
   it("never touches credentials, .claude.json, sessions or plugins", async () => {
@@ -170,7 +199,7 @@ describe("planSharedSetup / applySharedSetup", () => {
     expect(actionable).toBe(true);
     expect(text).toBe([
       `• settings.json: link ${join(d.target, "settings.json")} → ${join(d.reference, "settings.json")}`,
-      `• projects/: move ${join(d.target, "projects")} to ${join(d.target, "projects.bak-20261012-150405")}, copy its files into ${join(d.reference, "projects")} without overwriting, then link`,
+      `• projects/: move ${join(d.target, "projects")} to ${join(d.target, "projects.bak-20261012-150405", "projects")}, copy its files into ${join(d.reference, "projects")} without overwriting, then link`,
       "Stop Claude Code sessions that use this account first.",
       ".credentials.json, .claude.json, sessions/ and plugins/ are never touched.",
     ].join("\n"));
