@@ -18,7 +18,7 @@ Branch: `feat/account-onboarding` (from `main` at `927be66`).
 - [x] T3 — S3 — inline (high risk: moves user data) — commit: `a21ab68`
 - [x] T4 — S4 — inline — commit: `f665d57`
 - [x] T5 — S5 + README — inline — commit: `5daa058`
-- [ ] T6 — independent verify (S1-S5) + native review per RDD — commit: n/a
+- [x] T6 — independent verify (S1-S5) + native review per RDD — commit: n/a (fixes `ce255a4`, `854ca8b`, `6c66444`)
 
 ## Log
 
@@ -31,3 +31,5 @@ Branch: `feat/account-onboarding` (from `main` at `927be66`).
 - L7 verify round 1 (gentle-ai-verify): S1 pass, S4 pass; S2 partial (default ~/.claude not created), S3 fail (backup check-then-rename race overwrote 30/30; reference alias → symlink cycle ELOOP), S5 partial (decline lost already-shared status); P2 partial reference state after failed link. Fixed in `ce255a4` (exclusive backup container dir, alias detection, default dir creation, decline keeps shared outcomes, merge undo).
 - L8 verify round 2: all round-1 defects fixed; new P1 caused by the undo (deleted files it had not created). Fixed in `854ca8b` (undo only unchanged byte-identical copies; rmdir only empty dirs).
 - L9 verify round 3: S3 still fail — check-then-unlink window: a writer that swaps a file in between verification and unlink loses it (deterministic interleaving). Inherent to any delete-based undo. Proof exhausted after two correction rounds → user decision: keep narrow-window undo vs. drop undo (never delete; merged copies stay in the reference after a failed link).
+- L10 (2026-10-12, user decision): "No borrar nunca (recomendado)" — undo removed; a failed link restores the original and keeps copies already merged into the reference. Only remaining deletion is rmdir of the backup container this call created (rmdir never removes a non-empty dir). GREEN 305/305, typecheck pass. Commit: `6c66444`.
+- L11 RDD assess (base 927be66, committed only): risk medium, reviewDue false (under budget) → no native review; writer self-verification stands. Final: 305/305, typecheck pass. The final undo removal (6c66444) was not re-verified by the independent verifier.
