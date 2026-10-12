@@ -86,7 +86,7 @@ function assertKeys(value: Record<string, unknown>, allowed: string[]): void {
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new StoreValidationError();
 }
 
-function validName(name: unknown): name is string {
+export function isValidAccountName(name: unknown): name is string {
   return typeof name === "string" && /^[a-z0-9_-]+$/i.test(name);
 }
 
@@ -110,7 +110,7 @@ function normalizeStore(value: unknown): StateFile {
   const accounts: AccountEntry[] = value.accounts.map((entry: unknown) => {
     if (!record(entry)) throw new StoreValidationError();
     assertKeys(entry, ["name", "configDir"]);
-    if (!validName(entry.name)) throw new StoreValidationError("Invalid account name");
+    if (!isValidAccountName(entry.name)) throw new StoreValidationError("Invalid account name");
     const key = entry.name.toLowerCase();
     if (names.has(key)) throw new DuplicateAccountError(entry.name);
     names.add(key);
@@ -150,7 +150,7 @@ function requireAccount(store: StateFile, name: string): void {
 
 export function addAccount(store: StateFile, name: string, configDir: string | null): StateFile {
   const trimmed = name.trim();
-  if (!validName(trimmed)) throw new StoreValidationError("Invalid account name");
+  if (!isValidAccountName(trimmed)) throw new StoreValidationError("Invalid account name");
   if (store.accounts.some(account => account.name.toLowerCase() === trimmed.toLowerCase())) {
     throw new DuplicateAccountError(trimmed);
   }

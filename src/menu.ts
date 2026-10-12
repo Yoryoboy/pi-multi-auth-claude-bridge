@@ -1,6 +1,7 @@
 import { availability, priorityOrder } from "./accounts/selector.js";
 import type { RotationStore } from "./runtime.js";
 import type { UsageResult } from "./usage.js";
+import { runAddAccount, type AddAccountDependencies } from "./add-account.js";
 
 export interface AccountMenuUI {
   select(title: string, options: string[]): Promise<string | undefined>;
@@ -9,7 +10,7 @@ export interface AccountMenuUI {
   notify(message: string, level: "info" | "warning" | "error"): void;
 }
 
-export interface AccountMenuDependencies {
+export interface AccountMenuDependencies extends Pick<AddAccountDependencies, "ensureDirectory" | "homeDir"> {
   store: Pick<RotationStore, "load">;
   ui: AccountMenuUI;
   dispatch: (args: string) => Promise<void>;
@@ -51,7 +52,7 @@ export async function runAccountMenu(deps: AccountMenuDependencies): Promise<voi
     ]);
     if (choice === undefined || choice === "Close") return;
     if (choice === "Add account") {
-      await addAccount(deps);
+      await runAddAccount(deps);
       continue;
     }
     if (choice === "Clear preference") {
@@ -67,29 +68,5 @@ export async function runAccountMenu(deps: AccountMenuDependencies): Promise<voi
     } else if (action === "Remove" && await deps.ui.confirm("Remove account?", `Remove ${name} from Claude account rotation?`)) {
       await deps.dispatch(`remove ${name}`);
     }
-  }
-}
-
-async function addAccount(deps: AccountMenuDependencies): Promise<void> {
-  const input = await deps.ui.input("Account name");
-  if (input === undefined) return;
-  const name = input.trim();
-  if (!name || /\s/.test(name)) {
-    deps.ui.notify("Account name must be nonempty and contain no whitespace.", "error");
-    return;
-  }
-  const choice = await deps.ui.select("Config dir", ["default (~/.claude)", "Custom path…"]);
-  if (choice === undefined) return;
-  if (choice === "default (~/.claude)") {
-    await deps.dispatch(`add ${name} default`);
-  } else if (choice === "Custom path…") {
-    const path = await deps.ui.input("Config path");
-    if (path === undefined) return;
-    // The typed command splits on whitespace and cannot represent these paths.
-    if (!path || /\s/.test(path)) {
-      deps.ui.notify("Config path must be nonempty and contain no whitespace. Use a path without spaces.", "error");
-      return;
-    }
-    await deps.dispatch(`add ${name} ${path}`);
   }
 }

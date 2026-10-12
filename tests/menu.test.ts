@@ -75,32 +75,12 @@ describe("Claude account menu", () => {
     expect(h.ui.select.mock.calls[0][1]).toContain("Clear preference");
     expect(h.ui.select.mock.calls[1][1]).not.toContain("Clear preference");
   });
-  it.each([
-    { dir: "default (~/.claude)", inputs: [" main "], expected: "add main default" },
-    { dir: "Custom path…", inputs: ["main", "/custom"], expected: "add main /custom" },
-  ])("adds through $dir", async ({ dir, inputs, expected }) => {
-    const h = harness(["Add account", dir, "Close"], inputs);
+  it("runs the add-account wizard and reloads the menu afterwards", async () => {
+    const h = harness(["Add account", "~/.claude-main (suggested)", "Close"], ["main"]);
+    h.deps = { ...h.deps, homeDir: "/home/u", ensureDirectory: vi.fn(async () => true) } as typeof h.deps;
     await runAccountMenu(h.deps);
-    expect(h.ui.select).toHaveBeenCalledWith("Config dir", ["default (~/.claude)", "Custom path…"]);
-    expect(h.dispatch).toHaveBeenCalledExactlyOnceWith(expected);
-  });
-  it.each(["", "   ", "two names", "two\tnames"])("rejects invalid name %j", async name => {
-    const h = harness(["Add account", "Close"], [name]); await runAccountMenu(h.deps);
-    expect(h.dispatch).not.toHaveBeenCalled();
-    expect(h.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
-    expect(h.ui.select).not.toHaveBeenCalledWith("Config dir", expect.anything());
-  });
-  it.each(["/path with spaces", "/path\twith-tabs", ""])("rejects invalid custom path %j", async path => {
-    const h = harness(["Add account", "Custom path…", "Close"], ["main", path]);
-    await runAccountMenu(h.deps); expect(h.dispatch).not.toHaveBeenCalled();
-    expect(h.ui.notify).toHaveBeenCalledWith(expect.any(String), "error");
-  });
-  it.each([
-    { choices: ["Add account", "Close"], inputs: [undefined] },
-    { choices: ["Add account", undefined, "Close"], inputs: ["main"] },
-    { choices: ["Add account", "Custom path…", "Close"], inputs: ["main", undefined] },
-  ])("cancels add at each step ($inputs)", async ({ choices, inputs }) => {
-    const h = harness(choices, inputs); await runAccountMenu(h.deps);
-    expect(h.dispatch).not.toHaveBeenCalled(); expect(h.ui.notify).not.toHaveBeenCalled();
+    expect(h.ui.input).toHaveBeenCalledWith("Account name", "letters, digits, - or _");
+    expect(h.dispatch).toHaveBeenCalledExactlyOnceWith("add main /home/u/.claude-main");
+    expect(h.ui.select).toHaveBeenLastCalledWith("Claude accounts", expect.arrayContaining(["Add account", "Close"]));
   });
 });
