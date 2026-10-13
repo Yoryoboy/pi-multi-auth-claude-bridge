@@ -17,8 +17,9 @@ function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedP
   };
   const notify = vi.fn();
   const setStatus = vi.fn();
-  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, checkSharedProjects, getUsage });
-  return { runtime, store, env, notify, setStatus, get state() { return state; }, replace(next: StateFile) { state = next; } };
+  const resume = vi.fn();
+  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, resume, checkSharedProjects, getUsage });
+  return { runtime, store, env, notify, setStatus, resume, get state() { return state; }, replace(next: StateFile) { state = next; } };
 }
 
 describe("rotation runtime", () => {
@@ -344,5 +345,75 @@ describe("rotation runtime", () => {
     await h.runtime.onSessionStart();
     await h.runtime.onAssistantMessageEnd(error());
     expect(h.store.mutate).not.toHaveBeenCalled();
+  });
+  describe("resume after failover", () => {
+    // pi-claude-bridge answers Pi's retry of a turn interrupted at a tool boundary
+    // with an empty stop instead of a new query, so the turn would end silently.
+    const emptyStop = () => ({ role: "assistant", provider: "claude-bridge", stopReason: "stop", content: [] });
+    it.each([
+      ["rate limit", "Claude rate limit (five_hour)"],
+      ["account problem", "Failed to authenticate"],
+    ])("resumes once when the retry after a %s switch ends empty", async (_kind, errorMessage) => {
+      const h = harness();
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(error(errorMessage));
+      expect(h.resume).not.toHaveBeenCalled();
+      await h.runtime.beforeRequest();
+      const message = emptyStop();
+      expect(await h.runtime.onAssistantMessageEnd(message)).toBeUndefined();
+      expect(message).toEqual(emptyStop());
+      expect(h.resume).toHaveBeenCalledTimes(1);
+      expect(h.notify).toHaveBeenLastCalledWith('Claude account switched to "work" — resuming the interrupted turn', "info");
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(emptyStop());
+      expect(h.resume).toHaveBeenCalledTimes(1);
+    });
+    it("does not resume an empty stop without a preceding switch", async () => {
+      const h = harness();
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(emptyStop());
+      expect(h.resume).not.toHaveBeenCalled();
+    });
+    it("does not resume when the retry answers, nor on a later empty stop", async () => {
+      const h = harness();
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(error());
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd({ ...emptyStop(), content: [{ type: "text", text: "done" }] });
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(emptyStop());
+      expect(h.resume).not.toHaveBeenCalled();
+    });
+    it("does not resume when every account is exhausted", async () => {
+      const h = harness(setCooldown(accounts(), "work", now + 7_200_000, "rate_limit"));
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(error());
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(emptyStop());
+      expect(h.resume).not.toHaveBeenCalled();
+    });
+    it("does not resume an empty stop from another provider", async () => {
+      const h = harness();
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(error());
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd({ ...emptyStop(), provider: "anthropic" });
+      expect(h.resume).not.toHaveBeenCalled();
+    });
+    it("forgets a pending resume on session start", async () => {
+      const h = harness();
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(error());
+      await h.runtime.onSessionStart();
+      await h.runtime.beforeRequest();
+      await h.runtime.onAssistantMessageEnd(emptyStop());
+      expect(h.resume).not.toHaveBeenCalled();
+    });
   });
 });

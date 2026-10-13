@@ -25,12 +25,15 @@ export interface RotationDependencies {
   getUsage?: (accountName: string, configDir: string | null) => Promise<UsageResult>;
   checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
   checkSharedProjects?: typeof checkSharedProjects;
+  /** Continues a turn that the Bridge ended empty after a failover retry. */
+  resume?: () => void;
 }
 export interface RotationMessage {
   role: string;
   provider?: string;
   stopReason?: string;
   errorMessage?: string;
+  content?: unknown[];
 }
 
 function shellQuote(path: string): string {
@@ -50,6 +53,8 @@ export function createRotationRuntime(deps: RotationDependencies) {
   let warnedStore = false;
   let captured: { account: AccountEntry; probe: boolean; previousUntil: number | null } | undefined;
   let lastApplied: typeof captured;
+  // Account the next retry was switched to; consumed by the next assistant message.
+  let resumeTarget: string | undefined;
   let generation = 0;
   let usageGeneration = 0;
   let activeSelection: Extract<Selection, { kind: "account" }> | undefined;
@@ -224,6 +229,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
       stopChecks();
       clearUsage();
       warnedAuth = false;
+      resumeTarget = undefined;
       const mine = generation;
       unmanaged = false;
       launchChecked = false;
@@ -256,6 +262,18 @@ export function createRotationRuntime(deps: RotationDependencies) {
       }
     },
     async onAssistantMessageEnd<T extends RotationMessage>(message: T): Promise<T | undefined> {
+      if (message.role === "assistant" && resumeTarget !== undefined) {
+        const target = resumeTarget;
+        resumeTarget = undefined;
+        // pi-claude-bridge answers Pi's retry of a turn interrupted at a tool boundary
+        // with an empty stop instead of a new query, which would end the turn silently.
+        if (!unmanaged && message.provider === "claude-bridge" && message.stopReason === "stop" &&
+            (message.content?.length ?? 0) === 0) {
+          deps.notify(`Claude account switched to "${target}" — resuming the interrupted turn`, "info");
+          deps.resume?.();
+          return;
+        }
+      }
       if (unmanaged || !captured || message.role !== "assistant" ||
           message.provider !== "claude-bridge" || message.stopReason !== "error") return;
       const request = captured;
@@ -268,6 +286,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
           if (next.kind === "account" && !next.probe) {
             apply(state, next);
             status(next);
+            resumeTarget = next.account.name;
             deps.notify(`Claude account "${name}" needs attention: ${classification.reason} — switched to "${next.account.name}"`, "error");
             // Pi does not retry auth or billing errors; the original text must not survive the rewrite.
             return { ...message, errorMessage: `Claude account "${name}" needs attention — switched to "${next.account.name}", retrying (service unavailable)` };
@@ -282,6 +301,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
           if (next.kind === "account" && !next.probe) {
             apply(state, next);
             status(next);
+            resumeTarget = next.account.name;
             deps.notify(`Claude account "${name}" exhausted (resets ${localTime(until)}) — switched to "${next.account.name}"`, "warning");
           } else {
             const resets = state.accounts.flatMap(account => {

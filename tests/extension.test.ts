@@ -6,7 +6,7 @@ import { addAccount, removeAccount, setIdentity, setNeedsAttention, type Account
 
 function harness(hasUI = true, checkAccount: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus> = vi.fn(async () => ({ kind: "unavailable" as const, reason: "not installed" })), getUsage = vi.fn((_name: string, _dir: string | null) => new Promise<UsageResult>(() => {}))) {
   const handlers: Record<string, (...args: any[]) => any> = {};
-  const pi = { on: vi.fn((event: string, handler: any) => { handlers[event] = handler; }), registerCommand: vi.fn(), registerProvider: vi.fn() };
+  const pi = { on: vi.fn((event: string, handler: any) => { handlers[event] = handler; }), registerCommand: vi.fn(), registerProvider: vi.fn(), sendUserMessage: vi.fn() };
   const ctx = { hasUI, ui: { notify: vi.fn(), setStatus: vi.fn() } };
   let state: StateFile = addAccount({ version: 1, accounts: [], preferred: null, state: {} }, "work", "/work");
   const store = { load: vi.fn(async () => state), mutate: vi.fn(async (fn: StoreMutation) => { state = await fn(state); return state; }) };
@@ -177,5 +177,18 @@ describe("Pi extension wiring", () => {
     await h.handlers.context({}, h.ctx);
     expect(await h.handlers.message_end({ message: { role: "user", content: [] } }, h.ctx)).toBeUndefined();
     expect(h.store.mutate).not.toHaveBeenCalled();
+  });
+  it("queues a follow-up resume when the retry after a switch ends empty", async () => {
+    const h = harness();
+    h.replace(addAccount(h.state, "spare", "/spare"));
+    await h.handlers.session_start({}, h.ctx);
+    await h.handlers.context({ messages: [] }, h.ctx);
+    await h.handlers.message_end({ message: { role: "assistant", provider: "claude-bridge", stopReason: "error", errorMessage: "Claude rate limit", content: [] } }, h.ctx);
+    expect(h.env.CLAUDE_CONFIG_DIR).toBe("/spare");
+    expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    await h.handlers.context({ messages: [] }, h.ctx);
+    expect(await h.handlers.message_end({ message: { role: "assistant", provider: "claude-bridge", stopReason: "stop", content: [] } }, h.ctx)).toBeUndefined();
+    expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(h.pi.sendUserMessage).toHaveBeenCalledWith("Continue where you left off.", { deliverAs: "followUp" });
   });
 });
