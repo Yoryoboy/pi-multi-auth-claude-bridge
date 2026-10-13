@@ -11,8 +11,8 @@ Workaround here, then fix upstream in pi-claude-bridge (issue + linked PR). Bran
 ## Tasks
 - [x] T1 (S1) inline — workaround in this extension: after a switch, an empty `stop` from claude-bridge triggers one follow-up resume message. Commit: a9316a9
 - [x] T2 (S2) inline — fork/clone `elidickinson/pi-claude-bridge`, sync with upstream, confirm the bug still exists on latest. Result: fork Yoryoboy/pi-claude-bridge cloned at /home/yoryo/apps/pi-claude-bridge; upstream main b2e7255 (Release 0.9.2) == installed; bug present at src/index.ts:1803.
-- [ ] T3 (S3) inline — open upstream issue with the retry-after-failover repro, referencing #174. Link: —
-- [ ] T4 (S4) inline — comment on PR #174: it also fixes the retry case; report any verified gap. Link: —
+- [x] T3 (S3) inline — open upstream issue with the retry-after-failover repro, referencing #174. Link: https://github.com/elidickinson/pi-claude-bridge/issues/192
+- [x] T4 (S4) inline — comment on PR #174: it also fixes the retry case; report any verified gap. Link: https://github.com/elidickinson/pi-claude-bridge/pull/174#issuecomment-6147293207
 
 ## Log
 - L1: "hay un bug mira: Warning: Claude rate limited (five_hour) — resets at 1:40:00 PM ... Warning: Claude account "USA" exhausted (resets 13:40) — switched to "main" ❯ continua o sea cunaod llega rate limit si cambia de cuenta pero no sigue con el trabajo, tengoque decirle yo que continue"
@@ -24,3 +24,4 @@ Workaround here, then fix upstream in pi-claude-bridge (issue + linked PR). Bran
 - L7: Upstream already has open PR #174 (jcwasher, "Resume a tool result that arrives after a restart instead of orphaning it"): orphan branch only after an abort observed for that pi session; otherwise fresh query. Same root cause, different trigger (restart). It would also fix our retry case. Related open issues: #183 (make subscription-window rate limits non-retryable — would disable Pi's retry that this extension's failover relies on), #103 (five_hour error nulls sharedSession -> full re-cache). Duplicate issue+PR needs a user decision.
 - L8: User chose "Issue + apoyar #174 (recomendado)": open an issue with our repro referencing #174, and comment on #174 that it also covers this case. No duplicate PR.
 - L9: Probe (fake SDK, #174 harness; script kept at /tmp/probe/full.mjs). A = retry after a query error at a tool boundary, no abort; B = same retry after an earlier user abort in the session. main 0.9.2: A empty, B empty. PR #174: A fixed, B empty (abortedSessionIds is never cleared). #174 + `abortedSessionIds.delete(sessionId)` at fresh-query start: A and B fixed; unit suite 287/288 with and without it (pre-existing local failure: markStartupNoticeShown creates the config when there is none).
+- L10: Published issue #192 and the #174 comment (offered a follow-up PR for the abort-mark fix if the maintainer prefers). Follow-up risk: if upstream #183 makes five_hour limits non-retryable, this extension's failover must rewrite the switched error to a retryable one (like the account-problem path).
