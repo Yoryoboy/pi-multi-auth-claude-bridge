@@ -10,7 +10,7 @@ Workaround here, then fix upstream in pi-claude-bridge (issue + linked PR). Bran
 
 ## Tasks
 - [x] T1 (S1) inline — workaround in this extension: after a switch, an empty `stop` from claude-bridge triggers one follow-up resume message. Commit: a9316a9
-- [ ] T2 (S2) inline — fork/clone `elidickinson/pi-claude-bridge`, sync with upstream, confirm the bug still exists on latest. Commit: —
+- [x] T2 (S2) inline — fork/clone `elidickinson/pi-claude-bridge`, sync with upstream, confirm the bug still exists on latest. Result: fork Yoryoboy/pi-claude-bridge cloned at /home/yoryo/apps/pi-claude-bridge; upstream main b2e7255 (Release 0.9.2) == installed; bug present at src/index.ts:1803.
 - [ ] T3 (S3) inline — open upstream issue with evidence. Link: —
 - [ ] T4 (S4) inline — upstream fix + test, PR linked to the issue. Link: —
 
@@ -21,3 +21,4 @@ Workaround here, then fix upstream in pi-claude-bridge (issue + linked PR). Bran
 - L4: "ok hagamso el workaroudo para dejalro funcioanando con osotors. Luego, haz pull en upstream para ver que estemos actualkizado y abramos una issue y pongamos una pull reuqets aosicada  ala issue con la reoslucion al problema"
 - L5: T1 verified: RED 3 failing -> GREEN 316/316, typecheck OK; RDD assess medium, review not due, no separate verifier.
 - L6: RDD review lineage review-6d3187b743208ac1 (lens review-reliability, user granted consent) approved; acknowledgement burned authority (gentle-ai.review-acknowledged/v1).
+- L7: Upstream already has open PR #174 (jcwasher, "Resume a tool result that arrives after a restart instead of orphaning it"): orphan branch only after an abort observed for that pi session; otherwise fresh query. Same root cause, different trigger (restart). It would also fix our retry case. Related open issues: #183 (make subscription-window rate limits non-retryable — would disable Pi's retry that this extension's failover relies on), #103 (five_hour error nulls sharedSession -> full re-cache). Duplicate issue+PR needs a user decision.
