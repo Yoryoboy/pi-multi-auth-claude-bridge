@@ -34,6 +34,8 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     getUsage,
     checkSharedProjects: deps.checkSharedProjects ?? checkSharedProjects,
     checkAccount: checkAuth,
+    // Queued behind the empty turn so Pi starts a fresh Bridge query on the new account.
+    resume: () => pi.sendUserMessage("Continue where you left off.", { deliverAs: "followUp" }),
     now: deps.now ?? Date.now,
     env: deps.env,
     notify: (message, level) => {
