@@ -20,3 +20,4 @@ Workaround here, then fix upstream in pi-claude-bridge (issue + linked PR). Bran
 - L3: Upstream `elidickinson/pi-claude-bridge` is not the user's repo; user has no fork.
 - L4: "ok hagamso el workaroudo para dejalro funcioanando con osotors. Luego, haz pull en upstream para ver que estemos actualkizado y abramos una issue y pongamos una pull reuqets aosicada  ala issue con la reoslucion al problema"
 - L5: T1 verified: RED 3 failing -> GREEN 316/316, typecheck OK; RDD assess medium, review not due, no separate verifier.
+- L6: RDD review lineage review-6d3187b743208ac1 (lens review-reliability, user granted consent) approved; acknowledgement burned authority (gentle-ai.review-acknowledged/v1).
