@@ -16,6 +16,19 @@ function harness(hasUI = true, checkAccount: (account: AccountEntry, signal: Abo
 }
 
 describe("Pi extension wiring", () => {
+  it.each([["claude-bridge", true], ["anthropic", false]] as const)(
+    "reads provider usage headers only from %s", async (provider, rendered) => {
+      const h = harness();
+      await h.handlers.session_start({}, h.ctx);
+      await h.handlers.context({}, h.ctx);
+      h.ctx.ui.setStatus.mockClear();
+      await h.handlers.after_provider_response({ type: "after_provider_response", status: 200, headers: {
+        "anthropic-ratelimit-unified-5h-utilization": "0.25", "anthropic-ratelimit-unified-7d-utilization": "0.35",
+      } }, { ...h.ctx, model: { provider } });
+      if (rendered) expect(h.ctx.ui.setStatus).toHaveBeenLastCalledWith("claude-accounts", "claude: work · 5h 25% · wk 35%");
+      else expect(h.ctx.ui.setStatus).not.toHaveBeenCalled();
+    },
+  );
   it("registers the plural TUI command", () => {
     const h = harness();
     expect(h.pi.registerCommand).toHaveBeenCalledWith("claude-accounts", expect.objectContaining({ handler: expect.any(Function) }));
@@ -77,7 +90,7 @@ describe("Pi extension wiring", () => {
   });
   it("registers lifecycle hooks and command without starting auth checks", () => {
     const h = harness();
-    expect(Object.keys(h.handlers)).toEqual(["session_start", "context", "message_end", "turn_end", "session_shutdown"]);
+    expect(Object.keys(h.handlers)).toEqual(["session_start", "context", "message_end", "after_provider_response", "turn_end", "session_shutdown"]);
     expect(h.pi.registerCommand.mock.calls.map(([name]) => name)).toEqual(["claude-accounts"]);
     expect(h.checkAccount).not.toHaveBeenCalled();
     expect(h.pi.registerProvider).not.toHaveBeenCalled();

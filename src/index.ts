@@ -32,6 +32,7 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
   const runtime = createRotationRuntime({
     store,
     getUsage,
+    recordUsage: usageCache.record,
     checkSharedProjects: deps.checkSharedProjects ?? checkSharedProjects,
     checkAccount: checkAuth,
     // Queued behind the empty turn so Pi starts a fresh Bridge query on the new account.
@@ -63,6 +64,11 @@ export default function extension(pi: ExtensionAPI, deps: ExtensionDependencies 
     if (event.message.role !== "assistant") return;
     const message = await runtime.onAssistantMessageEnd(event.message);
     if (message) return { message };
+  });
+  // pi-claude-bridge rebuilds Claude Code's rate_limit_event as unified rate-limit headers.
+  pi.on("after_provider_response", (event, ctx) => {
+    context = ctx;
+    if (ctx.model?.provider === "claude-bridge") runtime.onProviderResponse(event.headers);
   });
   pi.on("turn_end", (_event, ctx) => {
     context = ctx;
