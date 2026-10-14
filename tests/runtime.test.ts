@@ -9,7 +9,10 @@ const time = (ms: number) => `${String(new Date(ms).getHours()).padStart(2, "0")
 const empty = (): StateFile => ({ version: 1, accounts: [], preferred: null, state: {} });
 const accounts = () => addAccount(addAccount(empty(), "main", null), "work", "/work");
 const error = (errorMessage = "Claude rate limit (five_hour)", provider = "claude-bridge") => ({ role: "assistant", provider, stopReason: "error", errorMessage, content: [] });
-function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedProjects = vi.fn(async (): Promise<ProjectsIssue[]> => []), getUsage?: (name: string, configDir: string | null) => Promise<UsageResult>) {
+const usageHeaders = (five: string, week: string) => ({
+  "anthropic-ratelimit-unified-5h-utilization": five, "anthropic-ratelimit-unified-7d-utilization": week,
+});
+function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedProjects = vi.fn(async (): Promise<ProjectsIssue[]> => []), getUsage?: (name: string, configDir: string | null) => Promise<UsageResult>, recordUsage = vi.fn()) {
   let state = initial;
   const store = {
     load: vi.fn(async () => structuredClone(state)),
@@ -18,11 +21,46 @@ function harness(initial = accounts(), env: NodeJS.ProcessEnv = {}, checkSharedP
   const notify = vi.fn();
   const setStatus = vi.fn();
   const resume = vi.fn();
-  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, resume, checkSharedProjects, getUsage });
-  return { runtime, store, env, notify, setStatus, resume, get state() { return state; }, replace(next: StateFile) { state = next; } };
+  const runtime = createRotationRuntime({ store, env, now: () => now, notify, setStatus, resume, checkSharedProjects, getUsage, recordUsage });
+  return { runtime, store, env, notify, setStatus, resume, recordUsage, get state() { return state; }, replace(next: StateFile) { state = next; } };
 }
 
 describe("rotation runtime", () => {
+  it("renders and records provider usage headers for the request's account over a pending fetch", async () => {
+    let finish!: (result: UsageResult) => void;
+    const getUsage = vi.fn(() => new Promise<UsageResult>(resolve => { finish = resolve; }));
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    await h.runtime.beforeRequest();
+    h.runtime.onProviderResponse(usageHeaders("0.8", "0.2"));
+    const result = { ok: true, fiveHour: { usedPercent: 80, resetsAt: null }, weekly: { usedPercent: 20, resetsAt: null } };
+    expect(h.recordUsage).toHaveBeenCalledWith("main", null, result);
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main · 5h 80% · wk 20%", "warning");
+    finish({ ok: false, reason: "rate-limited", retryAfterMs: null });
+    await Promise.resolve(); await Promise.resolve();
+    expect(h.setStatus).toHaveBeenLastCalledWith("claude: main · 5h 80% · wk 20%", "warning");
+  });
+  it("records headers for the request's account without rendering them for a different active account", async () => {
+    const h = harness(accounts(), {}, undefined, vi.fn(() => new Promise<UsageResult>(() => {})));
+    await h.runtime.onSessionStart();
+    await h.runtime.beforeRequest();
+    h.replace(setPreferred(h.state, "work"));
+    await h.runtime.refresh();
+    h.setStatus.mockClear();
+    h.runtime.onProviderResponse(usageHeaders("0.5", "0.5"));
+    expect(h.recordUsage).toHaveBeenCalledWith("main", null, expect.objectContaining({ ok: true }));
+    expect(h.setStatus).not.toHaveBeenCalled();
+  });
+  it("ignores provider responses without usage headers or before any request", async () => {
+    const h = harness(accounts(), {}, undefined, vi.fn(() => new Promise<UsageResult>(() => {})));
+    await h.runtime.onSessionStart();
+    h.runtime.onProviderResponse(usageHeaders("0.5", "0.5"));
+    await h.runtime.beforeRequest();
+    h.setStatus.mockClear();
+    h.runtime.onProviderResponse({ "content-type": "application/json" });
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.setStatus).not.toHaveBeenCalled();
+  });
   it.each([
     [42.6, 18.2, "5h 43% · wk 18%", "dim"],
     [75, 0, "5h 75% · wk 0%", "dim"],
@@ -53,7 +91,20 @@ describe("rotation runtime", () => {
     const initial = setCooldown(setCooldown(accounts(), "main", now + 1000, "rate_limit"), "work", now + 2000, "rate_limit");
     const h = harness(initial, {}, undefined, getUsage);
     await h.runtime.onSessionStart();
-    await vi.waitFor(() => expect(h.setStatus).toHaveBeenLastCalledWith("claude: main (probe) · limits unavailable", "warning"));
+    await vi.waitFor(() => expect(h.setStatus).toHaveBeenLastCalledWith("claude: main (probe) · limits n/a (network)", "warning"));
+  });
+  it.each([
+    [{ ok: false, reason: "expired" }, "token expired"],
+    [{ ok: false, reason: "unavailable" }, "no token"],
+    [{ ok: false, reason: "rate-limited", retryAfterMs: null }, "rate limited"],
+    [{ ok: false, reason: "http", status: 503 }, "HTTP 503"],
+    [{ ok: false, reason: "http" }, "network"],
+    [{ ok: false, reason: "invalid" }, "bad response"],
+  ] as const)("renders usage failure %j", async (result, label) => {
+    const getUsage = vi.fn(async (): Promise<UsageResult> => result);
+    const h = harness(accounts(), {}, undefined, getUsage);
+    await h.runtime.onSessionStart();
+    await vi.waitFor(() => expect(h.setStatus).toHaveBeenLastCalledWith(`claude: main · limits n/a (${label})`, "warning"));
   });
   it("does not await usage on requests and discards stale results after switching away and back or shutdown", async () => {
     const finishes: ((result: UsageResult) => void)[] = [];

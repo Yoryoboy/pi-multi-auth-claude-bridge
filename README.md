@@ -64,11 +64,13 @@ Never link `.credentials.json`, `.claude.json`, `sessions/`, or `plugins/`.
 | `Add account` | Guided setup: name, directory, shared settings and history, login wait, summary |
 | `Remove` | Remove the account from the registry (its directory is kept) |
 
-The status bar shows `claude: <name> · 5h N% · wk M%`, `claude: <name> · limits unavailable`, `claude: <name> (probe)`, or `claude: no accounts · back HH:MM`. Limits are colored by the higher window: dim up to 75%, warning above 75%, error above 90%.
+The status bar shows `claude: <name> · 5h N% · wk M%`, `claude: <name> · limits n/a (<reason>)`, `claude: <name> (probe)`, or `claude: no accounts · back HH:MM`. Limits are colored by the higher window: dim up to 75%, warning above 75%, error above 90%.
 
 ## Usage limits and credentials
 
-To show limits, the extension reads `claudeAiOauth.accessToken` and `expiresAt` from `<configDir>/.credentials.json` read-only and sends the token only to `https://api.anthropic.com/api/oauth/usage`. It never refreshes, copies, logs, or stores the token; an expired token shows `limits unavailable` until Claude Code renews it. Results are cached for 120 seconds and refreshed at session start, after each turn, and after account changes. The endpoint is undocumented and may change.
+Limits come first from the unified rate-limit headers (`anthropic-ratelimit-unified-5h-*` and `-7d-*`) that pi-claude-bridge rebuilds from Claude Code's `rate_limit_event` after each response. They are attributed to the account that sent the request and cost no extra request. The usage endpoint below is the fallback for session start and accounts without recent traffic.
+
+To show limits without that traffic, the extension reads `claudeAiOauth.accessToken` and `expiresAt` from `<configDir>/.credentials.json` read-only and sends the token only to `https://api.anthropic.com/api/oauth/usage`. It never refreshes, copies, logs, or stores the token; an expired token shows `limits n/a (token expired)` until Claude Code renews it. Other reasons are `no token` (missing or unreadable credentials), `rate limited` (HTTP 429), `HTTP <code>` (other non-2xx responses), `network` (network error or 10-second timeout), and `bad response` (unexpected response shape). Results are cached for 120 seconds and refreshed at session start, after each turn, and after account changes. A rate limit backs off per account for 5, 10, 20, then at most 30 minutes, or longer when `retry-after` asks for it; no refresh bypasses that backoff. The endpoint is undocumented and may change.
 
 If Pi is launched with a `CLAUDE_CONFIG_DIR` that is not registered, the extension warns once and leaves the environment alone for that session.
 

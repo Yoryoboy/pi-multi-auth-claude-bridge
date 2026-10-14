@@ -8,7 +8,7 @@ import {
 import { nextAfter, selectActive, type Selection } from "./accounts/selector.js";
 import { accountForEnv, applyAccountEnv } from "./env.js";
 import type { AuthStatus } from "./auth-status.js";
-import type { UsageResult, Window } from "./usage.js";
+import { parseUsageHeaders, type UsageResult, type Window } from "./usage.js";
 import { classifyError } from "./failover/classify.js";
 import { computeCooldownUntil } from "./failover/reset.js";
 
@@ -23,6 +23,8 @@ export interface RotationDependencies {
   notify(message: string, level: "info" | "warning" | "error"): void;
   setStatus(text: string | undefined, level?: "dim" | "warning" | "error"): void;
   getUsage?: (accountName: string, configDir: string | null) => Promise<UsageResult>;
+  /** Shares usage read from provider headers with the usage cache. */
+  recordUsage?: (accountName: string, configDir: string | null, result: UsageResult) => void;
   checkAccount?: (account: AccountEntry, signal: AbortSignal) => Promise<AuthStatus>;
   checkSharedProjects?: typeof checkSharedProjects;
   /** Continues a turn that the Bridge ended empty after a failover retry. */
@@ -38,6 +40,16 @@ export interface RotationMessage {
 
 function shellQuote(path: string): string {
   return /^[a-zA-Z0-9_./-]+$/.test(path) ? path : `'${path.replace(/'/g, `'"'"'`)}'`;
+}
+
+function usageFailureLabel(result: Extract<UsageResult, { ok: false }>): string {
+  switch (result.reason) {
+    case "expired": return "token expired";
+    case "unavailable": return "no token";
+    case "rate-limited": return "rate limited";
+    case "http": return result.status === undefined ? "network" : `HTTP ${result.status}`;
+    case "invalid": return "bad response";
+  }
 }
 
 function localTime(timestamp: number): string {
@@ -68,7 +80,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
     if (!activeSelection) return;
     const name = `claude: ${activeSelection.account.name}${activeSelection.probe ? " (probe)" : ""}`;
     if (!usage) { deps.setStatus(name); return; }
-    if (!usage.ok) { deps.setStatus(`${name} · limits unavailable`, "warning"); return; }
+    if (!usage.ok) { deps.setStatus(`${name} · limits n/a (${usageFailureLabel(usage)})`, "warning"); return; }
     const percent = (window: Window | null) => window === null ? "--" : `${Math.round(window.usedPercent)}%`;
     const worst = Math.max(usage.fiveHour?.usedPercent ?? 0, usage.weekly?.usedPercent ?? 0);
     deps.setStatus(`${name} · 5h ${percent(usage.fiveHour)} · wk ${percent(usage.weekly)}`,
@@ -82,7 +94,7 @@ export function createRotationRuntime(deps: RotationDependencies) {
     void (async () => {
       let result: UsageResult;
       try { result = await deps.getUsage!(account.name, account.configDir); }
-      catch { result = { ok: false, reason: "unavailable" }; }
+      catch { result = { ok: false, reason: "http" }; }
       if (mine !== usageGeneration || !activeSelection) return;
       usage = result;
       renderAccountStatus();
@@ -220,6 +232,19 @@ export function createRotationRuntime(deps: RotationDependencies) {
     get appliedAccountName() { return lastApplied?.account.name; },
     checkAccount: startCheck,
     refreshUsage,
+    /** Usage headers from a Bridge response belong to the account its request was captured for. */
+    onProviderResponse(headers: Record<string, string>): void {
+      if (unmanaged || !captured) return;
+      const result = parseUsageHeaders(headers);
+      if (!result) return;
+      const account = captured.account;
+      deps.recordUsage?.(account.name, account.configDir, result);
+      if (activeSelection?.account.name !== account.name || activeSelection.account.configDir !== account.configDir) return;
+      // Discard any endpoint fetch still in flight; the header snapshot is newer.
+      usageGeneration++;
+      usage = result;
+      renderAccountStatus();
+    },
     onSessionShutdown() { stopChecks(); clearUsage(); deps.setStatus(undefined); },
     async refresh(): Promise<void> {
       if (unmanaged) return;
